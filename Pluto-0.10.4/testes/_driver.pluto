@@ -1,0 +1,56 @@
+io.currentdir(io.part(io.absolute(arg[0]), "parent"))
+
+dofile("pluto/basic.pluto")
+dofile("pluto/test_compilation_errors.pluto")
+assert(dofile("pluto/many-consts.pluto") == "Hello255")
+assert(pcall(dofile, "pluto/many-locals.pluto") == false)
+
+if true then -- ffi test
+  io.currentdir("pluto/ffi")
+  if os.platform == "windows" then
+    os.execute("clang -std=c++17 --shared -o lib.dll lib.cpp")
+  else
+    os.execute("clang -std=c++17 -lstdc++ --shared -fPIC -o liblib.so lib.cpp")
+  end
+  dofile("test.pluto")
+  io.currentdir("../..")
+end
+
+warn("@off")
+print "--- Lua tests ---"
+
+do
+  local f = assert(loadfile('gc.lua'))
+  f()
+end
+
+dofile('db.lua')
+assert(dofile('calls.lua') == deep and deep)
+_G.deep = nil
+dofile('strings.lua')
+dofile('literals.lua')
+dofile('tpack.lua')
+dofile('gengc.lua')
+assert(dofile('locals.lua') == 5)
+dofile('constructs.lua')
+dofile('code.lua', true)
+do
+  local f = coroutine.wrap(assert(loadfile('big.lua')))
+  assert(f() == 'b')
+  assert(f() == 'a')
+end
+dofile('nextvar.lua')
+dofile('pm.lua')
+dofile('utf8.lua')
+dofile('api.lua')
+assert(dofile('events.lua') == 12)
+dofile('vararg.lua')
+dofile('closure.lua')
+dofile('coroutine.lua')
+dofile('goto.lua', true)
+dofile('errors.lua')
+dofile('math.lua')
+dofile('sort.lua', true)
+dofile('bitwise.lua')
+assert(dofile('verybig.lua', true) == 10); collectgarbage()
+--dofile('files.lua') -- This one is giving some weird errors

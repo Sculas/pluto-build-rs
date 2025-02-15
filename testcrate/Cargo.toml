@@ -1,0 +1,15 @@
+[package]
+name = "testcrate"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+mlua = { version = "0.10", features = [
+    "lua54",
+    "macros",
+    "external",
+], path = "../../mlua" }
+
+[build-dependencies]
+pluto-build = { path = ".." }

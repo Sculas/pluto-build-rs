@@ -1,0 +1,20 @@
+*.o
+*.exe
+*.dll
+*.so
+*.a
+*.lib
+*.exp
+
+# VS Code
+/.vscode/
+
+# Visual Studio
+.vs/
+int/
+out/
+Pluto.vcxproj.user
+
+# Linux Executables
+src/pluto
+src/plutoc

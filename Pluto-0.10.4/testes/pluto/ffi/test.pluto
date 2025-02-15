@@ -1,0 +1,154 @@
+local ffi = require "ffi"
+
+local lib = ffi.open(os.platform == "windows" ? "lib" : "./liblib.so")
+assert(lib:value("i32", "MY_MAGIC_INT") == 69)
+assert(lib:wrap("i32", "add", "i32", "i32")(38, 4) == 42)
+
+-- 'lib' can be used like any old table
+lib.add = lib:wrap("i32", "add", "i32", "i32")
+assert(lib.add(32, 10) == 42)
+lib.add = nil
+
+-- lib:cdef provides a subset of C as an alternative to the above usage
+lib:cdef[[
+int MY_MAGIC_INT;
+
+int add(int a, int b);
+]]
+assert(lib.MY_MAGIC_INT == 69)
+assert(lib.add(1, 2) == 3)
+
+-- Structs
+local Colour = ffi.struct[[
+    struct Colour {
+        uint8_t r;
+        uint8_t g;
+        uint8_t b;
+    };
+]]
+assert(ffi.sizeof(Colour) == 3)
+assert(ffi.offsetof(Colour, "r") == 0)
+assert(ffi.offsetof(Colour, "g") == 1)
+assert(ffi.offsetof(Colour, "b") == 2)
+local colour = new Colour()
+assert(ffi.sizeof(colour) == 3)
+assert(ffi.offsetof(colour, "r") == 0)
+assert(ffi.offsetof(colour, "g") == 1)
+assert(ffi.offsetof(colour, "b") == 2)
+colour.r = 255
+colour.g = 0
+colour.b = 127
+assert(colour.r == 255)
+assert(colour.g == 0)
+assert(colour.b == 127)
+
+-- ffi.cdef can be used to any number of structs which will be stored on the FFI library itself
+ffi.cdef[[
+struct Colour {
+    uint8_t r;
+    uint8_t g;
+    uint8_t b;
+};
+
+struct Human {
+    const char* name;
+};
+]]
+
+assert(ffi.sizeof("Colour") == 3)
+assert(ffi.offsetof("Colour", "r") == 0)
+assert(ffi.offsetof("Colour", "g") == 1)
+assert(ffi.offsetof("Colour", "b") == 2)
+
+colour = ffi.new("Colour")
+colour.r = 255
+colour.g = 0
+colour.b = 127
+assert(colour.r == 255)
+assert(colour.g == 0)
+assert(colour.b == 127)
+
+local human = ffi.new("Human")
+human.name = "John"
+assert(human.name == "John")
+
+local Vector3 = ffi.struct[[
+    struct Vector3 {
+        float x;
+        float y;
+        float z;
+    };
+]]
+assert(ffi.sizeof(Vector3) == 3 * 4)
+assert(ffi.offsetof(Vector3, "x") == 0)
+assert(ffi.offsetof(Vector3, "y") == 4)
+assert(ffi.offsetof(Vector3, "z") == 8)
+local position = Vector3.new()
+assert(ffi.sizeof(position) == 3 * 4)
+assert(ffi.offsetof(position, "x") == 0)
+assert(ffi.offsetof(position, "y") == 4)
+assert(ffi.offsetof(position, "z") == 8)
+
+ffi.cdef[[
+struct PointedAt {
+};
+
+struct PointsAt {
+    PointedAt *target;
+};
+]]
+local pointed_at = ffi.new("PointedAt")
+local points_at = ffi.new("PointsAt")
+points_at.target = pointed_at
+
+try
+    lib:cdef[[void non_existent();]]
+    assert(false) -- unreachable, cdef should throw
+catch e then
+    assert("could not find" in e)
+end
+
+ffi.cdef[[
+struct Result {
+    int sum;
+    int product;
+};
+]]
+lib:cdef[[
+void quick_maffs(Result *out, int a, int b);
+]]
+local res = ffi.new("Result")
+lib.quick_maffs(res, 3, 3)
+assert(res.sum == 6)
+assert(res.product == 9)
+
+lib:cdef[[
+void throw_exception(const char* msg);
+void throw_int(int value);
+]]
+if os.platform == "macos" then
+    -- Apparently, on ARM64, MacOS is not able to catch the exception here correctly.
+    assert("C++ exception" in select(2, pcall(|| -> lib.throw_exception("oh no"))))
+else
+    assert("C++ exception: oh no" in select(2, pcall(|| -> lib.throw_exception("oh no"))))
+end
+assert("C++ exception" in select(2, pcall(|| -> lib.throw_int(69))))
+
+-- Float tests
+local FloatTestStruct = require"ffi".struct([[
+    struct FloatTestStruct {
+        float f;
+        double d;
+    };
+]])
+local float_test_inst = new FloatTestStruct()
+float_test_inst.f = 69
+float_test_inst.d = 420
+assert(float_test_inst.f == 69)
+assert(float_test_inst.d == 420)
+
+-- Finally, remove the library from scope and ensure that it's not unloaded while its functions are still accessible
+local add = lib.add
+lib = nil
+collectgarbage()
+assert(add(32, 10) == 42)

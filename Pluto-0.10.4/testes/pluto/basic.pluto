@@ -1,0 +1,3780 @@
+print "Welcome to the test suite."
+
+local function assert_warn(code)
+    assert(wcall(function(_msg)
+        local chunk, err = load(code)
+        if chunk then chunk() else error(err) end
+    end) ~= "")
+end
+
+local function assert_no_warn(code)
+    assert(wcall(function(_msg)
+        local chunk, err = load(code)
+        if chunk then chunk() else error(err) end
+    end) == "")
+end
+
+print "Testing warnings."
+do
+    assert_warn([[local a; local a]]) -- var-shadow
+
+    assert_no_warn[[
+    local function takesInt(_a: int) end
+    takesInt(1)
+    ]]
+    assert_no_warn[[
+    local function takesFloat(_a: float) end
+    takesFloat(1.0)
+    ]]
+    assert_no_warn[[
+    local function takesNumber(_a: number) end
+    takesNumber(1)
+    takesNumber(1.0)
+    ]]
+    -- void|string
+    assert_no_warn[[
+    local function _f(): ?string
+        if true then
+            return
+        end
+        return ""
+    end
+    ]]
+    assert_no_warn[[
+    local function _f(): ?string
+        if true then
+            return ""
+        end
+    end
+    ]]
+    -- possible void|string false-positve
+    assert_no_warn[[
+    local function _f(): string
+        if true then
+        end
+        return ""
+    end
+    ]]
+    -- nil|string
+    assert_no_warn[[
+    local function _f(): ?string
+        if true then
+            return ""
+        end
+        return nil
+    end
+    ]]
+    assert_no_warn[[
+    local function _f(): ?string
+        if true then
+            return nil
+        end
+        return ""
+    end
+    ]]
+
+    -- TypeHint::merge should copy over function info
+    do
+        local f = function(_a) end
+        f(1)
+    end
+
+    -- Possible exception here
+    local function _dummy(f: function)
+        local _a = f()
+    end
+
+    -- Another possible exception here
+    assert_warn([[
+    local function delegator(_f: function) end
+    delegator()
+    ]])
+
+    assert_warn([[local a = 69; local _b: string = a]]) -- type mismatch in local-to-local assignment
+    assert_warn([[g = 69; local _l: string = g]]) -- type mismatch in global-to-local assignment
+
+    -- type mismatch when assigning function parameter to local
+    assert_warn [[
+    local function _f(a: int)
+        local b: string = a
+        print(b)
+    end
+    ]]
+
+    -- 'boolean' is a valid type hint for 'boolean|dunno' function
+    assert_no_warn [[local function _f(): boolean
+    if s then
+        return true
+    end
+    return s[1]
+end
+]]
+
+    -- 'string' is not a valid type hint for 'boolean|dunno' function
+    assert_warn [[local function _f(): string
+    if s then
+        return true
+    end
+    return s[1]
+end
+]]
+
+    -- nullcoal stuff
+    assert_warn [[local function f(): ?bool
+    if x then
+        return nil
+    end
+    return true
+end
+local a: string = f() ?? true]]
+    assert_no_warn [[local function f(): ?bool
+    if x then
+        return nil
+    end
+    return true
+end
+local _a: bool|int = f() ?? 0]]
+
+    -- 'else' propagates its return type too
+    assert_no_warn[[function _foo(x: number): ?string
+    if x == 2 then
+        return nil
+    else
+        return "foo"
+    end
+end]]
+
+    -- forstat propragates its return type too
+    assert_no_warn[[local function _whatever(): ?bool
+    for { 1 } as v do
+        return true
+    end
+    return nil
+end]]
+
+    -- possible false-positives after merging an unknown
+    assert_no_warn[[local mt, __newindex = getmetatable(t), nil
+if mt then
+    __newindex = mt.__newindex
+end
+if __newindex then end
+]]
+
+    -- discarded-return basic test
+    assert_warn[[local function f() <nodiscard>
+    return 69
+end
+
+f()]]
+
+    -- field-shadow
+    assert_warn[[
+    local t = {
+        first = 1,
+        second = 2,
+        first = 3,
+    }]]
+
+    -- possible unreachable-code false-positives
+    assert_no_warn[[local next
+while true do
+    if next then
+        break
+    end
+    next = true
+end]]
+    assert_no_warn[[if false and true then
+else
+end]]
+end
+-- Propagate conditional in block
+do
+    assert_no_warn[[local function _test(arg: string|number): void
+        if type(arg) == "string" then
+            local _str: string = arg
+        end
+    end]]
+    assert_warn[[local function _test(arg: string|number): void
+        if type(arg) == "string" then
+            arg = 69
+            local _str: string = arg
+        end
+    end]]
+    assert_no_warn[[local function _test(arg: string|number): void
+        if type(arg) == "string" then
+            arg = 69
+            local _str: number = arg
+        end
+    end]]
+end
+-- Strings should not be able to disable warnings
+do
+    assert_warn[[assert("@pluto_warnings: disable-all")
+
+    local x
+    local x]]
+end
+
+print "Testing assertion library."
+do
+    local assert = require("assert")
+
+    local function noerror(callback, ...)
+        local status = pcall(callback, ...)
+        assert(status == true)
+    end
+    local function haserror(callback, ...)
+        local status = pcall(callback, ...)
+        assert(status == false)
+    end
+    local function containserror(sub, callback, ...)
+        local status, msg = pcall(callback, ...)
+        assert((status == false) and msg:contains(sub))
+    end
+
+    noerror(assert.isnil, nil)
+    haserror(assert.isnil, 1)
+    containserror("Intended Value: nil", assert.isnil, 1)
+    noerror(assert.istrue, true)
+    haserror(assert.istrue, 1)
+    containserror("true", assert.istrue, 1)
+    noerror(assert.isfalse, false)
+    haserror(assert.isfalse, 1)
+    containserror("false", assert.isfalse, 1)
+    noerror(assert.falsy, nil)
+    haserror(assert.falsy, { 1, 2, 3 })
+    containserror("nil or false", assert.falsy, 99)
+    noerror(assert.truthy, {})
+    haserror(assert.truthy, false)
+    containserror("not nil or false", assert.truthy, nil)
+    noerror(assert.notnil, false)
+    haserror(assert.notnil, nil)
+    containserror("not nil", assert.notnil, nil)
+    local fn = || -> 0
+    local t1 = {
+        1, 2, 3, 4, 5, 6, 7, 9, 0,
+        k = {
+            tabbb = {
+                anothertab = {
+                    1, 2, 3, 4, another_tab = {
+                        ["a"] = fn
+                    }
+                }
+            }
+        }
+    }
+    local t2 = {
+        1, 2, 3, 4, 5, 6, 7, 9, 0,
+        k = {
+            tabbb = {
+                anothertab = {
+                    1, 2, 3, 4, another_tab = {
+                        ["a"] = fn
+                    }
+                }
+            }
+        }
+    }
+    assert.equal(t1, t2)
+    noerror(assert.equal, t1, t2)
+    noerror(assert.equal, t1, t1)
+    haserror(assert.equal, t1, { 1, 2, 3, 4 })
+    haserror(assert.nequal, t1, t2)
+    noerror(assert.nequal, t1, { 1, 2, 3, k = 5 })
+    noerror(assert.nequal, 1, 2)
+    noerror(assert.less, 1, 2)
+    containserror("<", assert.less, 2, 2)
+    noerror(assert.lesseq, 2, 2)
+    containserror("<=", assert.lesseq, 3, 2)
+    containserror("Expression", assert.lesseq, 3, 2)
+    noerror(assert.greater, 2, 1)
+    containserror(">", assert.greater, 1, 2)
+    noerror(assert.greatereq, 2, 2)
+    containserror(">=", assert.greatereq, 2, 3)
+    noerror(assert.noerror, tostring, 5)
+    containserror("An error was raised:", assert.noerror, error, 5)
+    noerror(assert.haserror, error, "hello world")
+    containserror("Expected", assert.haserror, tostring, "hello")
+    noerror(assert.searcherror, "hello world", error, "hello world")
+    containserror("Expected", assert.searcherror, "hello world", tostring, "hello world")
+    containserror("Absent", assert.searcherror, "hello world", error, "abc")
+    assert.equal({}, {})
+    assert.nequal({}, { 1 })
+    noerror(assert.contains, "hello world", "apple pie hello world yellow apple")
+    noerror(assert.contains, "my element", { 1, 2, 3, 4, "my element", 5 })
+    haserror(assert.contains, "hello world", "nothing to see here")
+    haserror(assert.contains, "my element", { 1, 2, 3, 4, "my not element", 5 })
+end
+
+print "Testing compound assignment."
+do
+    local a, b = 1, 2
+    a += 1
+    b += 1
+    assert(a == 2)
+    assert(b == 3)
+
+    a, b = 1, 2
+    a -= 1
+    b -= 1
+    assert(a == 0)
+    assert(b == 1)
+
+    a, b = 1, 2
+    a *= 2
+    b *= 2
+    assert(a == 2)
+    assert(b == 4)
+
+    a, b = 1, 2
+    a %= 2
+    b %= 2
+    assert(a == 1)
+    assert(b == 0)
+
+    a, b = 1, 2
+    a ^= 2
+    b ^= 2
+    assert(a == 1.0)
+    assert(b == 4.0)
+
+    a, b = 1, 2
+    a |= 1
+    b |= 1
+    assert(a == 1)
+    assert(b == 3)
+
+    a, b = 1, 2
+    a &= 1
+    b &= 1
+    assert(a == 1)
+    assert(b == 0)
+
+    a, b = 1, 2
+    a /= 1
+    b /= 2
+    assert(a == 1.0)
+    assert(b == 1.0)
+
+    a, b = 1, 2
+    a //= 1
+    b //= 2
+    assert(a == 1)
+    assert(b == 1)
+
+    a, b = 1, 2
+    a <<= 1
+    b <<= 1
+    assert(a == 2)
+    assert(b == 4)
+
+    a, b = 1, 2
+    a >>= 1
+    b >>= 1
+    assert(a == 0)
+    assert(b == 1)
+
+    a, b = 0xf0, 0x0f
+    a ~= 0xff
+    b ~= 0xff
+    assert(a == 0x0f)
+    assert(b == 0xf0)
+
+    local t = {
+        tt = {
+            ttt = {
+                tttt = {
+                    v = 1
+                }
+            }
+        }
+    }
+    t.tt.ttt.tttt.v += 499
+    assert(t.tt.ttt.tttt.v == 500)
+end
+
+print "Testing string indexing."
+do
+    local str = "abc"
+    assert(str[0] == nil)
+    assert(str[1] == "a")
+    assert(str[2] == "b")
+    assert(str[3] == "c")
+    assert(str[4] == nil)
+    assert(str[5] == nil)
+    assert(str[-1] == "c")
+    assert(str[-2] == "b")
+    assert(str[-3] == "a")
+    assert(str[-4] == nil)
+    assert(str[-5] == nil)
+end
+
+print "Testing continue statement."
+do
+    local t = { 1, 2, 3, 4, 5, 6, 7, 8, 9 }
+    local sum = 0
+    for _index, value in ipairs(t) do
+        if value == 5 then
+            continue
+        end
+        sum += value
+    end
+    assert(sum == 40)
+
+    sum = 0
+    for i = 1, 10 do
+        if i == 5 then
+            continue
+        end
+        sum += i
+    end
+    assert(sum == 50)
+
+    local lines = {
+        "This",
+        "Is",
+        "Some",
+        "Lines",
+    }
+
+    for index, line in ipairs(lines) do
+        if index == 1 and line == "This" then
+            continue
+        elseif index == #lines and line == "Lines" then
+            continue
+        end
+        assert(line != "This" and line != "Lines")
+    end
+
+    local b = false
+    local function test()
+        b = true
+        return true
+    end
+    repeat
+        continue
+    until test()
+    assert(b)
+end
+-- Test upvalues
+do
+    do
+        local function test(w, r)
+            w(1)
+            assert(r()==1)
+            return true
+        end
+
+        repeat
+            local val
+            local function write(v) val = v end
+            continue
+        until test(write, ||->val)
+    end
+
+    do
+        local t
+        repeat
+            do
+                local _u1, _u2, _u3, u4
+                t = ||->u4
+                continue
+            end
+        until true
+        do
+            for _ in pairs({}) do end
+        end
+        assert(t() == nil)
+    end
+
+    do
+        local t
+        do
+            for _i = 1, 1 do
+                do
+                    local u1
+                    t = ||->u1
+                    continue
+                end
+            end
+        end
+        do
+            local _x
+            for _ in pairs({}) do end
+        end
+        assert(t() == nil)
+    end
+
+    do
+        local tmp = false
+        local function c()
+            if tmp then
+                tmp()
+                return false
+            end
+            return 1
+        end
+
+        while c() do
+            local b = 2
+            ::x::
+            if tmp then continue end
+            tmp = ||->do b=nil end
+            goto x
+        end
+    end
+
+    do
+        local tmp
+        while true do
+            local x
+            ::again::
+            if tmp then break 1 end
+            tmp = ||->x
+            goto again
+        end
+        assert(tmp() == nil)
+    end
+end
+-- Test variable scoping
+do
+    repeat
+        local a = 1
+        continue
+    until a > 0
+
+    repeat
+        local a = 1
+        if true then
+            continue
+        end
+    until a > 0
+
+    assert(load[[--@pluto_warnings disable-all
+    repeat
+        if true then
+            continue
+        end
+        local a = 1
+    until a > 0]] == nil)
+
+    assert(load[[--@pluto_warnings disable-all
+    repeat
+        if true then
+            local a = ""
+            continue
+        end
+        local a = 1
+    until a > 0]] == nil)
+
+    assert(load[[--@pluto_warnings disable-all
+    repeat
+        if true then
+            local a = ""
+            continue
+        end
+        local a = 1
+        if false then continue end
+    until a > 0]] == nil)
+
+    assert(load[[[--@pluto_warnings disable-all
+    repeat
+        if true then
+            local a = ""
+            do
+                continue
+            end
+        end
+        local a = 1
+    until a > 0]] == nil)
+
+    repeat
+        repeat
+            if true then
+                continue 2
+            end
+            local a = 1
+        until a > 0
+    until true
+end
+
+print "Testing table length cache."
+do
+    local t = {}
+    for i = 1, 1000 do
+        t[i] = "abc"
+    end
+    assert(#t == 1000, #t)
+
+    for i = 1, 100 do
+        table.remove(t, i + math.random(1, 5))
+    end
+    assert(#t == 900, #t)
+
+    local metatest = setmetatable({}, { __len = function () return 5 end })
+    assert(#metatest == 5, #metatest)
+
+    t = {}
+    for _i = 1, 1000 do
+        table.insert(t, "Hello")
+        table.insert(t, "World")
+    end
+    assert(#t == 2000)
+
+    t = {}
+    for i = 1, 1000 do
+        rawset(t, i, "Hello")
+    end
+    assert(#t == 1000)
+
+    t = {1}
+    assert(#t == 1)
+    table.clear(t)
+    assert(#t == 0)
+end
+
+print "Testing null coalescing operator."
+do
+    _G.zz = false
+    z = _G.zz
+    a = z
+    b = "hello"
+    c = a ?? b
+    assert(c == false)
+    _G.zz = nil
+    z = _G.zz
+    a = z
+    b = "hello"
+    c = a ?? b
+    assert(c == "hello")
+    local zz = false
+    local z = zz
+    local a = z
+    local b = "hello"
+    local c = a ?? b
+    assert(c == false)
+    zz = nil
+    z = zz
+    a = z
+    b = "hello"
+    c = a ?? b
+    assert(c == "hello")
+    assert(not (a ?? b) == false)
+    a = false
+    b = "hello"
+    a ??= b
+    assert(a == false)
+    assert(not (a ?? b) == true)
+    a = nil
+    a ??= b
+    assert(a == "hello")
+    assert(not (a ?? b) == false)
+end
+do
+    local y = nil
+    local x = y ?? 10
+    assert(y == nil)
+    assert(x == 10)
+end
+do
+    local y <const> = nil
+    local x = y ?? 10
+    assert(y == nil)
+    assert(x == 10)
+end
+
+print "Testing safe navigation."
+do
+    debug.sethook(function() end, "c", 1)
+
+    local a = A?.B?.C?.D
+    assert(a == nil)
+    a = A?["B"]?["C"]?["D"]
+    assert(a == nil)
+    a = A?["B"]?["C"]?["D"]?[-5]?[0]
+    local T = {}
+    T.K = {}
+    T.K.Z = {}
+    assert(T?.K?.Z == T.K.Z)
+
+    local t = { [-1] = 1 }
+    assert(t?[-1] == 1)
+
+    local class Class
+        val: bool = true
+
+        function method()
+            return self.val, 69
+        end
+    end
+    local inst = new Class()
+
+    local function assert_1_ret(...)
+        assert(table.pack(...).n == 1)
+    end
+
+    assert(inst?:method() == true)
+    assert(optinst?:method() == nil)
+    assert(inst:method?() == true)
+    assert(inst:optmethod?() == nil)
+    assert(inst?:method?() == true)
+    assert(inst?:optmethod?() == nil)
+    assert(optinst?:method?() == nil)
+    inst:method?()
+    inst:optmethod?()
+    local r1, r2 = inst:optmethod?()
+    assert(r1 == nil)
+    assert(r2 == nil)
+    r1, r2 = optinst?:optmethod?()
+    assert(r1 == nil)
+    assert(r2 == nil)
+    r1, r2 = inst?:optmethod?()
+    assert(r1 == nil)
+    assert(r2 == nil)
+    assert_1_ret(inst:optmethod?())
+    assert_1_ret(inst?:optmethod?())
+    assert_1_ret(optinst?:optmethod?())
+    inst?:method()
+    inst?:optmethod?()
+    optinst?:method()
+    optinst?:optmethod?()
+    r1, r2 = inst:method?()
+    assert(r1 == true)
+    assert(r2 == 69)
+    r1, r2 = inst?:method?()
+    assert(r1 == true)
+    assert(r2 == 69)
+
+    debug.sethook()
+end
+do
+    do
+        for _ in pairs({}) do end
+    end
+    local x, y, z, w = _G:m?()
+    assert(x == nil and y == nil and z == nil and w == nil)
+end
+do
+    do
+        for _ in pairs({}) do end
+    end
+    local x, y, z, w = optinst?:m?()
+    assert(x == nil and y == nil and z == nil and w == nil)
+end
+
+print "Testing ternary expression."
+do
+    -- @pluto_warnings: disable-unreachable-code
+
+    local a = 3
+    assert((true ? "yes" : "no") == "yes")
+    assert((false ? "yes" : "no") == "no")
+    assert((a ? "yes" : "no") == "yes")
+    assert((a == 3 ? "yes" : "no") == "yes")
+    assert((a == 4 ? "yes" : "no") == "no")
+    assert((3 == a ? "yes" : "no") == "yes")
+    assert((4 == a ? "yes" : "no") == "no")
+    assert((nil and nil) ? false : true) -- possible pitfall if we try optimizing for 'always false' conditions
+
+    -- Nested ternary
+    assert(true ? true ? true : false : false)
+
+    -- Method call in 'b' expression
+    local t = {
+        function t() return true end
+    }
+    assert(true ? (t:t()) : false)
+
+    -- Longhand: 'if' expression
+    assert(if a == 3 then
+        "yes"
+    else
+        "no"
+    end == "yes")
+
+    -- @pluto_warnings: enable-unreachable-code
+end
+
+print "Testing 'in' expressions."
+if ("hel" in "hello") != true then error() end
+if ("abc" in "hello") != false then error() end
+do
+    local t = {
+        nil,
+        key = "KEY",
+        nil,
+        "ARRAY"
+    }
+    assert("KEY" in t)
+    assert("ARRAY" in t)
+    assert(("NOTHING" in t) == false)
+end
+do
+    -- table must be global for this failure case
+    t = {
+        subt = {
+            nil,
+            key = "KEY",
+            nil,
+            "ARRAY"
+        }
+    }
+    assert("KEY" in t.subt)
+    assert("ARRAY" in t.subt)
+    local function proxy(b)
+        assert(b == false)
+    end
+    proxy(42 in t.subt)
+    t = nil
+end
+do
+    -- temporary table
+    assert("apple" in { 1, nil, "aaaa", "apple" })
+    assert(not "banana" in { apple = true })
+    assert(type("apple" in { apple = true }) == "boolean")
+end
+do -- check stack corruption
+    local t = {
+        nil,
+        key = "KEY",
+        nil,
+        "ARRAY"
+    }
+
+    local a = "KEY"
+    assert(a in t)
+    assert(a == "KEY")
+    local b = || -> "Hello World"
+    local c = "ARRAY"
+    assert(c in t)
+    local e = "NOTHING"
+    assert(not e in t)
+    assert(a == "KEY")
+    assert(b() == "Hello World")
+    assert(c == "ARRAY")
+    assert(e == "NOTHING")
+end
+do 
+    local t = {key="value"}
+    assert(("key" in t) == false)
+    t[1] = "world"
+    assert((1 in t) == false)
+end
+
+print "Testing break N syntax."
+do
+    local sum = 0
+    for i = 1, 10 do
+        for ii = 1, 10 do
+            sum = sum + ii + i
+            break 1
+        end
+        sum = sum + i
+    end
+    assert(sum == 120)
+end
+
+do
+    local sum = 0
+    for i = 1, 10 do
+        for ii = 1, 10 do
+            sum = sum + ii + i
+            break 2
+        end
+        sum = sum + i
+    end
+    assert(sum == 2)
+end
+
+do
+    local sum = 0
+    for i = 1, 10 do
+        for ii = 1, 10 do
+            sum = sum + ii + i
+            for iii = 1, 10 do
+                sum = sum + iii + ii + i
+                break 3
+            end
+        end
+        sum = sum + i
+    end
+    assert(sum == 5)
+end
+
+do
+    while true do
+        if true then
+            break
+        end
+    end
+end
+
+print "Testing switch statement."
+do
+    local value = 5
+    pluto_switch (value) do
+        case 5:
+        break
+        default:
+        error()
+    end
+    value = 3
+    pluto_switch value do
+        case 1:
+        case 2:
+        case 3:
+        case 4:
+        case 5:
+        break
+        default:
+        error()
+    end
+    do
+        local casecond <const> = 3
+        pluto_switch value do
+            case casecond:
+            break
+            default:
+            error()
+        end
+    end
+    do
+        local casecond = 3
+        pluto_switch value do
+            case casecond:
+            break
+            default:
+            error()
+        end
+    end
+    do
+        local casecond <const> = 3
+        pluto_switch value do
+            default:
+            error()
+            break
+            case casecond:
+        end
+    end
+    do
+        local casecond = 3
+        pluto_switch value do
+            default:
+            error()
+            break
+            case casecond:
+        end
+    end
+    value = +3
+    pluto_switch value do
+        case +1:
+        case +2:
+        case +3:
+        case +4:
+        case +5:
+        break
+        default:
+        error()
+    end
+    value = "foo"
+    pluto_switch (value) do
+        case "foo":
+        break
+        default:
+        error()
+    end
+    pluto_switch (value) do
+        case "abc":
+        case "124":
+        case nil:
+        case false:
+        case true:
+        case "23420948239":
+        case "foo":
+        case 1238123:
+        case -2409384029842:
+        case "awweee":
+        break
+        default:
+        error()
+    end
+    value = nil
+    pluto_switch (value) do
+        case -1:
+        case nil:
+        case -2:
+        break
+        default:
+        error()
+    end
+    value = -24389
+    pluto_switch (value) do
+        case "aawdkawmlwadmlaw":
+        case "q49324932":
+        case nil:
+        case "130-91230921":
+        case false:
+        case 231923:
+        case true:
+        case -234234:
+        case -24389:
+        case 23429:
+        case "bar":
+        case "foobar":
+        case "barfoo":
+        break
+        default: 
+        error()
+    end
+    value = -1
+    pluto_switch (value) do
+        case "aawdkawmlwadmlaw":
+        case "q49324932":
+        case nil:
+        case "130-91230921":
+        case false:
+        case 231923:
+        case true:
+        case -234234:
+        case -24389:
+        case 23429:
+        case "bar":
+        case "foobar":
+        case "barfoo":
+        error()
+    end
+    value = -3.14
+    pluto_switch (value) do
+        case "aawdkawmlwadmlaw":
+        case "q49324932":
+        case nil:
+        case "130-91230921":
+        case false:
+        case -3.14:
+        case true:
+        case -234234:
+        case -24389:
+        case 23429:
+        case "bar":
+        case "foobar":
+        case "barfoo":
+        break
+    end
+    value = -3.3
+    pluto_switch (value) do
+        case "aawdkawmlwadmlaw":
+        case "q49324932":
+        case nil:
+        case "130-91230921":
+        case false:
+        case -3.15:
+        case true:
+        case -234234:
+        case -24389:
+        case 23429:
+        case "bar":
+        case "foobar":
+        case "barfoo":
+        error()
+    end
+    t = 0
+    value = -3.15
+    pluto_switch (value) do
+        case "aawdkawmlwadmlaw":
+        case "q49324932":
+        case nil:
+        case "130-91230921":
+        case false:
+        case -3.15:
+        case true:
+        case -234234:
+        case -24389:
+        case 23429:
+        case "bar":
+        case "foobar":
+        case "barfoo":
+        t = true
+    end
+    assert(t == true)
+    t = 0
+    value = -3.15
+    pluto_switch (value) do
+        case "aawdkawmlwadmlaw":
+        case "q49324932":
+        case nil:
+        case "130-91230921":
+        case false:
+        case -3.15:
+        case true:
+        case -234234:
+        case -24389:
+        case 23429:
+        case "bar":
+        case "foobar":
+        case "barfoo":
+        t = true
+        break
+        default:
+        t = false
+    end
+    assert(t == true)
+    t = 0
+    value = 3
+    pluto_switch value do
+        case 1:
+        default:
+        error()
+        break
+        case 3:
+        t = true
+    end
+    assert(t == true)
+    local function switchfunc(a)
+        switch a do
+            case 1: -- return before case
+            return
+            case 2:
+            return 2
+            case 3: -- return before case, with break
+            return
+            break
+            case 4: -- return before defualt
+            return
+            default:
+            return
+        end
+        return 3
+    end
+    assert(switchfunc(1) == nil)
+    assert(switchfunc(2) == 2)
+    assert(switchfunc(3) == nil)
+    assert(switchfunc(4) == nil)
+end
+do
+    switch true do
+        default:
+            error()
+            break
+        case (87 == 87):
+    end
+end
+do
+    local x = 3
+    local y = 2
+    switch x do
+        default:
+            error()
+            break
+        case y + 1: -- x == y + 1
+    end
+end
+do
+    local pluto_class CloseMe
+        function __construct(public closed = false)
+        end
+
+        function __close()
+            self.closed = true
+        end
+    end
+    local c = pluto_new CloseMe()
+    do
+        switch 1 do
+            case 1:
+                do
+                    local _ <close> = c
+                end
+                break
+            default:
+                error()
+        end
+    end
+    assert(c.closed)
+end
+do
+    switch 1 do
+        case 0:
+            do
+                local _tbl = {}
+            end
+            break
+        case 1:
+            do
+                local tbl = {}
+                for k, v in "test string":split(" ") do
+                    tbl[k] = v
+                end
+                assert(tbl[1] == "test")
+                assert(tbl[2] == "string")
+            end
+            break
+    end
+end
+do
+    local function getResponse(word)
+        switch word do
+            case "hi", "hello":
+                return "Greetings!"
+            default:
+                return "Unrecognised word"
+            case "bye", "goodbye":
+                return "Farewell!"
+        end
+    end
+    assert(getResponse("hi") == "Greetings!")
+    assert(getResponse("hello") == "Greetings!")
+    assert(getResponse("bye") == "Farewell!")
+    assert(getResponse("goodbye") == "Farewell!")
+    assert(getResponse("deez") == "Unrecognised word")
+end
+do
+    -- Test variable scoping
+    do
+        for _ in pairs({}) do end
+    end
+    local function helper(a, b, c, d, e)
+        assert(a == nil and b == nil and c == nil and d == nil and e == nil)
+    end
+    switch 2 do
+        case 1:
+            break
+        case helper(switch_a, switch_b, switch_c, switch_d, switch_e):
+            local _switch_a, _switch_b, _switch_c, _switch_d, _switch_e
+            break
+    end
+end
+-- Continue can't be used inside of a switch statement
+assert(load[[
+switch 1 do
+case 1:
+    do
+        continue
+    end
+    break
+end]] == nil)
+-- ':' must be unambiguous
+assert(load[[
+local tab = {
+    print=function(...) print("TabPrint", ...) end
+}
+switch 1 do
+    case 2: break
+    case true?1:tab: print("OK")
+end
+]] == nil)
+-- Fallthrough can be used on empty cases
+switch 1 do
+    case 1:
+        --[[@fallthrough]]
+    case 2:
+end
+-- Possible infinite loop
+do
+    local a, b = false, true
+    switch a and b do default: end
+    switch b or a do default: end
+end
+
+print "Testing switch expression."
+do
+    local function int2eng(i)
+        return switch i do
+            case 1 -> "One"
+            case 2 -> "Two"
+            default -> "Other"
+        end
+    end
+    assert(int2eng(1) == "One")
+    assert(int2eng(2) == "Two")
+    assert(int2eng(69) == "Other")
+end
+do
+    local function int2eng(i)
+        local ret = switch i do
+            case 1 -> "One"
+            case 2 -> "Two"
+            default -> "Other"
+        end
+        return ret
+    end
+    assert(int2eng(1) == "One")
+    assert(int2eng(2) == "Two")
+    assert(int2eng(69) == "Other")
+end
+do
+    local function getResponse(word)
+        return switch word do
+            case "hi", "hello" -> "Greetings!"
+            default -> "Unrecognised word"
+            case "bye", "goodbye" -> "Farewell!"
+        end
+    end
+    assert(getResponse("hi") == "Greetings!")
+    assert(getResponse("hello") == "Greetings!")
+    assert(getResponse("bye") == "Farewell!")
+    assert(getResponse("goodbye") == "Farewell!")
+    assert(getResponse("deez") == "Unrecognised word")
+end
+-- Test method call within casecond
+do
+    local class Human
+        function __construct(public name)
+        end
+
+        function getName()
+            return self.name
+        end
+    end
+    local h = new Human("John")
+    local str = switch "John" do
+        case h:getName() -> "Same name"
+        default -> "Different name"
+    end
+    assert(str == "Same name")
+end
+-- Test that switchexpr doesn't displace registers so we get "attempt to call a string value" or something
+do
+    class Human
+        function __construct(public name)
+        end
+
+        function getName()
+            return self.name
+        end
+    end
+    local h = new Human("John")
+    assert(switch "John" do
+        case h:getName() -> "Same name"
+        default -> "Different name"
+    end)
+end
+-- Assert that default return value is nil, not whatever was in the register before
+do
+    function f()
+        assert("dummy")
+        return switch 42 do end
+    end
+    assert(f() == nil)
+end
+-- Possible infinite loop
+assert(
+    switch 0 do
+        default -> switch 1 do
+            default -> true
+        end
+    end
+)
+
+print "Testing table freezing."
+do
+    local t = table.freeze({ 1, 2, 3, "hello", "world" })
+    local status, _ = pcall(function () t.key = "abc" end)
+    assert(status == false, "expected error")
+    status, _ = pcall(function () t["key"] = "abc" end)
+    assert(status == false, "expected error")
+    status, _ = pcall(function () t[1] = "abc" end)
+    assert(status == false, "expected error")
+    status, _ = pcall(function () t[66] = "abc" end)
+    assert(status == false, "expected error")
+    status, _ = pcall(function () t[function () end] = "abc" end)
+    assert(status == false, "expected error")
+
+    t = { 1, 2, 3, "hello", "world" }
+    status, _ = pcall(function () t.key = "abc" end)
+    assert(status == true, "unexpected error")
+    status, _ = pcall(function () t["key"] = "abc" end)
+    assert(status == true, "unexpected error")
+    status, _ = pcall(function () t[1] = "abc" end)
+    assert(status == true, "unexpected error")
+    status, _ = pcall(function () t[66] = "abc" end)
+    assert(status == true, "unexpected error")
+    status, _ = pcall(function () t[function () end] = "abc" end)
+    assert(status == true, "unexpected error")
+
+    --[[
+    table.freeze(_G)
+    status, _ = pcall(function () _G.string = "abc" end)
+    assert(status == false, "expected error")
+    status, _ = pcall(function () _G["string"] = "abc" end)
+    assert(status == false, "expected error")
+    status, _ = pcall(function () _G[1] = "abc" end)
+    assert(status == false, "expected error")
+    status, _ = pcall(function () _G[66] = "abc" end)
+    assert(status == false, "expected error")
+    status, _ = pcall(function () _G[function () end] = "abc" end)
+    assert(status == false, "expected error")
+
+    table.freeze(_ENV)
+    status, _ = pcall(function () _ENV.string = "abc" end)
+    assert(status == false, "expected error")
+    status, _ = pcall(function () _ENV["string"] = "abc" end)
+    assert(status == false, "expected error")
+    status, _ = pcall(function () _ENV[1] = "abc" end)
+    assert(status == false, "expected error")
+    status, _ = pcall(function () _ENV[66] = "abc" end)
+    assert(status == false, "expected error")
+    status, _ = pcall(function () _ENV[function () end] = "abc" end)
+    assert(status == false, "expected error")
+    --]] --> Doing this will break tests done with dofile(), since the environment is reused.
+end
+
+print "Testing pipe operator."
+do
+    local function f(x)
+        assert(x == 69)
+    end
+
+    local a, b = {} |> dumpvar
+    assert(type(a) == "string")
+    assert(b == nil)
+
+    assert(("69") |> tonumber == 69)
+
+    -- Additional arguments shorthand (longhand would be writing a lambda)
+    assert(("69") |> tonumber|16| == 0x69)
+
+    -- Try to avoid syntax ambiguity by not allowing function call with '(' in the chain after pipe operator was used.
+    -- @pluto_warnings disable-next
+    ;(69) |> f (69) |> f
+
+    -- Other types of function calls are still okay, tho, since string and table are not valid statements.
+    ;("Hello") |> require"json".encode |> |x| -> assert(x == [["Hello"]])
+    ;("Hello") |> (require"json".encode) |> |x| -> assert(x == [["Hello"]])
+
+    -- Method calls
+    local obj = {
+        function setValue(value)
+            self.value = value
+        end
+    }
+    ;(69) |> obj:setValue
+    assert(obj.value == 69)
+
+    -- Indexing a global for argument + function
+    _SERVER = {
+        REDIRECT_INVOKE_FILENAME = "/deez/nuts"
+    }
+    assert(_SERVER.REDIRECT_INVOKE_FILENAME |> io.part|"parent"| == "/deez")
+end
+do
+    assert(("Hello" |> string.upper) == "HELLO")
+end
+
+print "Testing standard library additions."
+do
+    local v3 = require"pluto:vector3"
+    -- Left-handed Z-up: Thumb points left, index finger points forward, middle finger points up.
+    assert(v3(1, 0, 0):torot("zl") == v3(0, 0, -90))
+    assert(v3(0, 1, 0):torot("zl") == v3(0, 0, 0))
+    assert(v3(0, 0, 1):torot("zl") == v3(90, 0, 0))
+    -- Right-handed Z-up: Thumb points right, index finger points forward, middle finger points up.
+    assert(v3(1, 0, 0):torot("zr") == v3(0, 0, 90))
+    assert(v3(0, 1, 0):torot("zr") == v3(0, 0, 0))
+    assert(v3(0, 0, 1):torot("zr") == v3(90, 0, 0))
+    -- Left-handed Y-up: Thumb points right, index finger points up, middle finger points forward.
+    assert(v3(1, 0, 0):torot("yl") == v3(0, 90, 0))
+    assert(v3(0, 1, 0):torot("yl") == v3(90, 0, 0))
+    assert(v3(0, 0, 1):torot("yl") == v3(0, 0, 0))
+    -- Right-handed Y-up: Thumb points left, index finger points up, middle finger points forward.
+    assert(v3(1, 0, 0):torot("yr") == v3(0, -90, 0))
+    assert(v3(0, 1, 0):torot("yr") == v3(90, 0, 0))
+    assert(v3(0, 0, 1):torot("yr") == v3(0, 0, 0))
+    -- And now the inverse.
+    assert(v3(0, 0, -90):todir("zl").x == 1)
+    assert(v3(0, 0, 0):todir("zl").y == 1)
+    assert(v3(90, 0, 0):todir("zl").z == 1)
+    assert(v3(0, 0, 90):todir("zr").x == 1)
+    assert(v3(0, 0, 0):todir("zr").y == 1)
+    assert(v3(90, 0, 0):todir("zr").z == 1)
+    assert(v3(0, 90, 0):todir("yl").x == 1)
+    assert(v3(90, 0, 0):todir("yl").y == 1)
+    assert(v3(0, 0, 0):todir("yl").z == 1)
+    assert(v3(0, -90, 0):todir("yr").x == 1)
+    assert(v3(90, 0, 0):todir("yr").y == 1)
+    assert(v3(0, 0, 0):todir("yr").z == 1)
+end
+do
+    local crypto = require("crypto")
+    assert(crypto.fnv1("hello world") == 0x7DCF62CDB1910E6F)
+    assert(crypto.fnv1a("hello world") == 8618312879776256743)
+    assert(crypto.joaat("hello world") == 1045060183)
+    -- Constexpr
+    assert($crypto.fnv1("hello world") == 0x7DCF62CDB1910E6F)
+    assert($crypto.fnv1a("hello world") == 8618312879776256743)
+    assert($crypto.joaat("hello world") == 1045060183)
+
+    assert(crypto.sha1("Pluto") == "bce8c9aca4120776fad6b517874aa09c46405454")
+    assert(crypto.sha1("Pluto", true) == "\xbc\xe8\xc9\xac\xa4\x12\x07\x76\xfa\xd6\xb5\x17\x87\x4a\xa0\x9c\x46\x40\x54\x54")
+    assert(crypto.sha256("Pluto") == "8dad5f6a7dd2dcd8c35ec2fd7babb499bcad60d27d73fe73eca2ce025dfd3b47")
+    assert(crypto.sha256("Pluto", true) == "\x8d\xad\x5f\x6a\x7d\xd2\xdc\xd8\xc3\x5e\xc2\xfd\x7b\xab\xb4\x99\xbc\xad\x60\xd2\x7d\x73\xfe\x73\xec\xa2\xce\x02\x5d\xfd\x3b\x47")
+    assert(crypto.sha384("Pluto", false) == "db890233a919b6745d632633c419e14540ff79f1a89bc4ac194b00e7f913f0f06d5d4d7d6cc2b4aaf9485d223afb8cf0")
+    assert(crypto.sha512("Pluto", false) == "ee8410a8bf9511b94fd6669b5c3e0c4b86e8e4bf7baa8dbd2773d4d6381dd1aecebbe391bef4c6158620ab3f6b794907652d4432c2301d7e1a6caf520565cdf2")
+
+    assert(crypto.md5("hello world") == "5eb63bbbe01eeed093cb22bb8f5acdc3")
+    assert(crypto.md5("BEMjYxMTUxNDkx") == "e3bae1422755829a92440f1d044767ff")
+
+    assert(crypto.ripemd160("Pluto") == "c2072a85f4a691803b8942709036072086fd9550")
+    assert(crypto.ripemd160("Pluto", true) == "\xc2\x07\x2a\x85\xf4\xa6\x91\x80\x3b\x89\x42\x70\x90\x36\x07\x20\x86\xfd\x95\x50")
+end
+do
+    local base64 = require("base64")
+    assert(base64.encode("Hello") == "SGVsbG8=")
+    assert(base64.encode("Hello", false) == "SGVsbG8")
+    assert(base64.decode("SGVsbG8") == "Hello")
+    assert(base64.decode("SGVsbG8=") == "Hello")
+    assert(base64.encode("The quick brown fox jumps over the lazy dog.", true) == "VGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5IGRvZy4=")
+    assert(base64.encode("The quick brown fox jumps over the lazy dog.", false) == "VGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5IGRvZy4")
+
+    assert(base64.urlencode("Hello") == "SGVsbG8")
+    assert(base64.urldecode("SGVsbG8") == "Hello")
+    assert(base64.urlencode("The quick brown fox jumps over the lazy dog.", true) == "VGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5IGRvZy4=")
+    assert(base64.urlencode("The quick brown fox jumps over the lazy dog.", false) == "VGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5IGRvZy4")
+
+    -- Binary safe
+    assert(base64.encode("") == "")
+    assert(base64.decode("") == "")
+    assert(base64.encode("\x00") == "AA==")
+    assert(base64.decode("AA==") == "\x00")
+end
+do
+    local base32 = require("base32")
+
+    -- Binary safe
+    assert(base32.encode("") == "")
+    assert(base32.decode("") == "")
+    assert(base32.encode("\x00") == "AA======")
+    assert(base32.decode("AA======") == "\x00")
+end
+do
+    local json = require("json")
+
+    assert(json.decode([[{"a":null]]).a == nil)
+    assert(json.decode([[{"a":null}]], json.withnull).a == json.null)
+
+    -- Don't want a C stack overflow here
+    assert(not pcall(|| -> require"json".decode("[":rep(10000).."]":rep(10000))))
+
+    do
+        local t = {
+            __order = { "a", "b", "c" },
+            a = 1,
+            b = 2,
+            c = 3
+        }
+        assert(json.encode(t) == [[{"a":1,"b":2,"c":3}]])
+    end
+
+    assert(json.encode(json.null) == "null")
+
+    do
+        local t = json.decode([[{"a":1,"b":2,"c":3}]], json.withorder)
+        assert(t.__order[1] == "a")
+        assert(t.__order[2] == "b")
+        assert(t.__order[3] == "c")
+    end
+
+    assert(json.encode({}) == "[]")
+    assert(json.encode({ __order = {} }) == "{}")
+    assert(json.encode(json.decode("[{},[]]", json.withorder)) == "[{},[]]")
+
+    local function recursive_enc()
+        local t = {}
+        t.t = t
+        return json.encode(t)
+    end
+    assert(select(2, pcall(recursive_enc)) == "C stack overflow")
+
+    local function overflow_enc()
+        local root = {}
+        do
+            local prev_t = root
+            for _ = 1, 10000 do
+                local t = {}
+                prev_t:insert(t)
+                prev_t = t
+            end
+        end
+        return json.encode(root)
+    end
+    assert(select(2, pcall(overflow_enc)) == "C stack overflow")
+end
+do
+    local root = {}
+    do
+        local prev_t = root
+        for _ = 1, 1000 do
+            local t = {}
+            prev_t:insert(t)
+            prev_t = t
+        end
+    end
+    assert(select(2, pcall(|| -> dumpvar(root))) == "C stack overflow")
+end
+do
+    local xml = require "pluto:xml"
+
+    -- Decode
+    assert(xml.decode([[<root non-standard-attr />]], "xml").attributes?["non-standard-attr"] == nil)
+    assert(xml.decode([[<root non-standard-attr />]], "lax").attributes?["non-standard-attr"] == "")
+    assert(xml.decode([[<root non-standard-attr />]], "html").attributes?["non-standard-attr"] == "")
+
+    -- Decode: Metatable
+    local root = xml.decode([[
+        <root>
+            <node>text</node>
+        </root>
+    ]])
+    assert(root.node.tag == "node")
+    assert(root.node.children[1] == "text")
+    assert(root.node.deez == nil)
+
+    -- Decode: No Lua stack overflow please
+    assert(xml.decode("<p>":rep(99).."</p>":rep(99)))
+    -- No C stack overflows, either
+    assert(not pcall(|| -> xml.decode("<p>":rep(10000).."</p>":rep(10000))))
+
+    -- Encode
+    assert(xml.encode{
+        tag = "root",
+        children = {
+            {
+                tag = "entry",
+                attributes = {
+                    ["type"] = "primary"
+                },
+                children = {
+                    "Text node"
+                }
+            },
+            {
+                tag = "entry"
+            }
+        }
+    } == [[<root><entry type="primary">Text node</entry><entry></entry></root>]])
+end
+do
+    -- No C Stack overflow on xml.encode either please
+    local root = { tag = "root", children = {} }
+    do
+        local prev_t = root
+        for _ = 1, 1000 do
+            local t = { tag = "node", children = {} }
+            prev_t.children:insert(t)
+            prev_t = t
+        end
+    end
+    assert(select(2, pcall(|| -> require"xml".encode(root))) == "C stack overflow")
+end
+do
+    local t = { key = "value" }
+    table.insert(t, 0)
+    table.insert(t, "Hello")
+    table.insert(t, true)
+    assert(table.contains(t, "Hello") == 2)
+    assert(table.contains(t, "World") == nil)
+    assert(table.contains(t, true) == 3)
+    assert(table.contains(t, false) == nil)
+    assert(table.contains(t, 0) == 1)
+    assert(table.contains(t, 1) == nil)
+    assert(table.contains(t, "value") == "key")
+    assert(string.isascii("hello world") == true)
+    assert(string.isascii("hello.world") == true)
+    assert(string.isascii("hello1world") == true)
+    assert(string.isascii("hello📙world") == false)
+    assert(string.islower("hello world") == false)
+    assert(string.islower("helloworld") == true)
+    assert(string.islower("hello1world") == false)
+    assert(string.isalpha("hello world") == false)
+    assert(string.isalpha("helloworld") == true)
+    assert(string.isalpha("hello1world") == false)
+    assert(string.isalpha("hello?world") == false)
+    assert(string.isupper("HELLOWORLD") == true)
+    assert(string.isupper("HELLO WORLD") == false)
+    assert(string.isupper("HELLO?WORLD") == false)
+    assert(string.isalnum("abc123") == true)
+    assert(string.isalnum("abc 123") == false)
+    assert(string.isalnum("abc?123") == false)
+    assert(string.iswhitespace("   \t   \f \n \r\n") == true)
+    assert(string.iswhitespace("\t\f   \r\n \r \n \t z") == false)
+    assert(string.contains("hello world", "world") == true)
+    assert(string.contains("hello world", "z") == false)
+    assert(string.endswith("hello world", "rld") == true)
+    assert(string.endswith("hello world", "trc") == false)
+    assert(string.startswith("hello world", "hello") == true)
+    assert(string.startswith("hello world", "truck") == false)
+    assert(string.strip("???hello world???", "?") == "hello world")
+    assert(string.strip("123hello world123", "123") == "hello world")
+    assert(string.lstrip("???hello world???", "?") == "hello world???")
+    assert(string.lstrip("12hello world12", "12") == "hello world12")
+    assert(string.rstrip("???hello world???", "?") == "???hello world")
+    t = string.split("hello world abc", " ")
+    assert(t[1] == "hello")
+    assert(t[2] == "world")
+    assert(t[3] == "abc")
+    local before, after = string.partition("hello.wor.ld", ".")
+    assert(before == "hello")
+    assert(after == "wor.ld")
+    before, after = string.partition("hello.wor.ld", ".", true)
+    assert(before == "hello.wor")
+    assert(after == "ld")
+    assert(string.casefold("HELLO WORLD", "hello world") == true)
+    assert(string.casefold("HELLO WORLD", "hello worlz") == false)
+    assert(string.rfind("world hello world", "world") == 13)
+    assert(string.rfind("hello x", "world") == nil)
+    assert("99 dreams of 99 red balloons":rfind("%d") == 15)
+    assert("aaa":rfind("%d") == nil)
+    assert("1aa":rfind("%d") == 1)
+    assert("a1a":rfind("%d") == 2)
+    assert("aa1":rfind("%d") == 3)
+    assert("111":rfind("%d") == 3)
+    local _begin, _end = "aaa":rfind("")
+    assert(_begin == 3 and _end == 2)
+    assert("":rfind("%d") == nil)
+    assert("111":rfind("%d", 1) == nil)
+    assert("111":rfind("%d", 2) == 1)
+    assert("111":rfind("%d", 3) == 2)
+    assert("111":rfind("%d", 4) == 3)
+    assert(string.upper("hello", 1) == "Hello")
+    assert(string.upper("hello", 2) == "hEllo")
+    assert(string.upper("hello", -1) == "hellO")
+    assert(string.upper("hello", -2) == "helLo")
+    assert(string.upper("hello", -6) == "hello")
+    assert(string.upper("hello", 6) == "hello")
+    assert(string.upper("hello") == "HELLO")
+    assert(string.lower("HELLO") == "hello")
+    assert(string.lower("HELLO", 1) == "hELLO")
+    assert(string.lower("HELLO", 2) == "HeLLO")
+    assert(string.lower("HELLO", -1) == "HELLo")
+    assert(string.lower("HELLO", -2) == "HELlO")
+    assert(string.lower("HELLO", -14) == "HELLO")
+    assert(string.truncate("Hello, World!", 5) == "Hello")
+    assert(string.truncate("Hello, World!", 5, true) == "He...")
+    assert(string.truncate("Hello", 1) == "H")
+    assert(string.truncate("Hello", 1, true) == "H")
+    assert(string.truncate("Hello", 4, true) == "H...")
+    assert(string.truncate("Hello", 6) == "Hello")
+    assert(string.truncate("Hello", 6, true) == "Hello")
+    assert(string.replace("hello world", "joe", "abc") == "hello world")
+    assert(string.replace("hello world", " ", "") == "helloworld")
+    assert(string.replace("LLLL", "L", "X") == "XXXX")
+    assert(string.replace("LLLL", "L", "X", 2) == "XXLL")
+    local function septest(sep)
+        local fn = |...| -> string.formatint(...)
+
+        assert(fn(100, sep) == "100")
+        assert(fn(1000, sep) == $"1{sep}000")
+        assert(fn(10000, sep) == $"10{sep}000")
+        assert(fn(100000, sep) == $"100{sep}000")
+        assert(fn(1000000, sep) == $"1{sep}000{sep}000")
+        assert(fn(10000000, sep) == $"10{sep}000{sep}000")
+
+        assert(fn(-100, sep) == "-100")
+        assert(fn(-1000, sep) == $"-1{sep}000")
+        assert(fn(-10000, sep) == $"-10{sep}000")
+        assert(fn(-100000, sep) == $"-100{sep}000")
+        assert(fn(-1000000, sep) == $"-1{sep}000{sep}000")
+        assert(fn(-10000000, sep) == $"-10{sep}000{sep}000")
+    end
+
+    septest(",")
+    septest(".")
+    septest(" ")
+    local _, err = pcall(|| -> septest("..."))
+    assert(err:contains("length of 1"))
+
+    local function septest2(sep)
+        local fn = |...| -> string.formatint(...)
+
+        assert(fn(100, sep, 2) == $"1{sep}00")
+        assert(fn(1000, sep, 2) == $"10{sep}00")
+        assert(fn(10000, sep, 2) == $"1{sep}00{sep}00")
+        assert(fn(100000, sep, 2) == $"10{sep}00{sep}00")
+
+        assert(fn(-100, sep, 2) == $"-1{sep}00")
+        assert(fn(-1000, sep, 2) == $"-10{sep}00")
+        assert(fn(-10000, sep, 2) == $"-1{sep}00{sep}00")
+        assert(fn(-100000, sep, 2) == $"-10{sep}00{sep}00")
+    end
+
+    septest2(",")
+    septest2(".")
+    septest2(" ")
+
+    assert(string.formatint("+3249230492345645324234234234234234234234234324242343243242342343423242344") == "+3,249,230,492,345,645,324,234,234,234,234,234,234,234,234,324,242,343,243,242,342,343,423,242,344")
+    assert(string.formatint("-3249230492345645324234234234234234234234234324242343243242342343423242344") == "-3,249,230,492,345,645,324,234,234,234,234,234,234,234,234,324,242,343,243,242,342,343,423,242,344")
+end
+do
+    assert("XYZ":tohex(false, false) == "58595a")
+    assert("XYZ":tohex(true,  false) == "58 59 5a")
+    assert("XYZ":tohex(false, true)  == "58595A")
+    assert("XYZ":tohex(true,  true)  == "58 59 5A")
+
+    assert("58595a":fromhex() == "XYZ")
+    assert("58 59 5a":fromhex() == "XYZ")
+    assert("58595A":fromhex() == "XYZ")
+    assert("58 59 5A":fromhex() == "XYZ")
+end
+do
+    local arr = "a b c":split(" ")
+    assert(#arr == 3)
+    assert(arr[1] == "a")
+    assert(arr[2] == "b")
+    assert(arr[3] == "c")
+
+    arr = "a b c":split(" ", 2)
+    assert(#arr == 2)
+    assert(arr[1] == "a")
+    assert(arr[2] == "b c")
+
+    arr = "a b c":split(" ", 1)
+    assert(#arr == 1)
+    assert(arr[1] == "a b c")
+end
+do
+    local str = "Hello, World! == %% 20 <> //\\"
+    local url = require"pluto:url"
+    assert(url.encode(str) == "Hello%2C%20World%21%20%3D%3D%20%25%25%2020%20%3C%3E%20%2F%2F%5C")
+    assert(url.decode(url.encode(str)) == str)
+
+    local parts = require"url".parse("http://username:password@hostname:9090/path?arg=value#anchor")
+    assert(parts.scheme == "http")
+    assert(parts.user == "username")
+    assert(parts.pass == "password")
+    assert(parts.host == "hostname")
+    assert(parts.port == 9090)
+    assert(parts.path == "/path")
+    assert(parts.query == "arg=value")
+    assert(parts.fragment == "anchor")
+end
+do
+    local t = { 5, 4, 3, 2, 1, even = 8, odd = 9 }
+    table.filter(t, |v| -> v % 2 ~= 0)
+    assert(t[1] == 5)
+    assert(t[2] == nil)
+    assert(t[3] == 3)
+    assert(t[4] == nil)
+    assert(t[5] == 1)
+    assert(t.even == nil)
+    assert(t.odd == 9)
+end
+do
+    local t = { 5, 4, 3, 2, 1, even = 8, odd = 9 }
+    table.filter(t, |_k, v| -> v % 2 ~= 0, true)
+    assert(t[1] == 5)
+    assert(t[2] == nil)
+    assert(t[3] == 3)
+    assert(t[4] == nil)
+    assert(t[5] == 1)
+    assert(t.even == nil)
+    assert(t.odd == 9)
+end
+do
+    local t = { 5, 4, 3, 2, 1, even = 8, odd = 9 }
+    table.filter(t, |k| -> type(k) == "string", true)
+    assert(t[1] == nil)
+    assert(t[2] == nil)
+    assert(t[3] == nil)
+    assert(t[4] == nil)
+    assert(t[5] == nil)
+    assert(t.even == 8)
+    assert(t.odd == 9)
+end
+do
+    do
+        local t = { 1, nil, 2, nil, nil, 3, nil, nil, nil, 4, nil }
+        t:reorder()
+        assert(t[1] == 1)
+        assert(t[2] == 2)
+        assert(t[3] == 3)
+        assert(t[4] == 4)
+        assert(t[5] == nil)
+    end
+
+    do
+        local t = { 1, 2, 3, "hello" }:reorder()
+        assert(t[1] == 1)
+        assert(t[2] == 2)
+        assert(t[3] == 3)
+        assert(t[4] == "hello")
+    end
+end
+do
+    local menu = {
+        { id = 1, name = "Pizza" },
+        { id = 2, name = "Doener" }
+    }
+    local betterDoener = { id = 2, name = "Better Doener" }
+    menu = table.map(menu, |item| -> item.id == betterDoener.id ? betterDoener : item)
+    assert(menu[2].name == "Better Doener")
+end
+do
+    local t = { 1, 2, 3, key = 4 }
+    t = table.map(t, |v| -> v * 2)
+    assert(t[1] == 2)
+    assert(t[2] == 4)
+    assert(t[3] == 6)
+    assert(t.key == 8)
+end
+do
+    local t = { 1, 2, 3, key = 4 }
+    t = table.map(t, |_k, v| -> v * 2, true)
+    assert(t[1] == 2)
+    assert(t[2] == 4)
+    assert(t[3] == 6)
+    assert(t.key == 8)
+end
+do
+    local t = { 1, 2, 3, key = 4 }
+    t = table.map(t, |k| -> type(k) == "string" ? 0 : k * 2, true)
+    assert(t[1] == 2)
+    assert(t[2] == 4)
+    assert(t[3] == 6)
+    assert(t.key == 0)
+end
+do
+    assert(0 == {1,2,}:size(true))
+    assert(1 == {1,2, a = "a" }:size(true))
+    assert(2 == {1,2, a = "a", b = "b" }:size(true))
+    assert(3 == {1,2, a = "a", b = "b", c = "c" }:size(true))
+    assert(4 == {1,2, a = "a", b = "b", c = "c", d = "d" }:size(true))
+    assert(5 == {1,2, a = "a", b = "b", c = "c", d = "d", e = "e" }:size(true))
+
+    assert(2 == {1,2,}:size(false))
+    assert(3 == {1,2, a = "a" }:size(false))
+    assert(4 == {1,2, a = "a", b = "b" }:size(false))
+    assert(5 == {1,2, a = "a", b = "b", c = "c" }:size(false))
+    assert(6 == {1,2, a = "a", b = "b", c = "c", d = "d" }:size(false))
+    assert(7 == {1,2, a = "a", b = "b", c = "c", d = "d", e = "e" }:size(false))
+end
+do
+    local t = { 1, 2, 3 }
+    assert(t:reduce(|a, b| -> a + b) == 6)
+    assert(t:reduce(math.max, math.mininteger) == 3)
+    assert(t:reduce(math.min, math.maxinteger) == 1)
+    assert({"a", "b", "c"}:reduce(|a, b| -> a .. b, "") == "abc")
+end
+do
+    local t = { 3, 2, 1 }
+    local ts = t:sorted()
+    assert(t[1] == 3)
+    assert(t[2] == 2)
+    assert(t[3] == 1)
+    assert(ts[1] == 1)
+    assert(ts[2] == 2)
+    assert(ts[3] == 3)
+end
+do
+    local t = { 1, 2, 3 }
+    local tm = t:mapped(|n| -> n * 2)
+    assert(t[1] == 1)
+    assert(t[2] == 2)
+    assert(t[3] == 3)
+    assert(tm[1] == 2)
+    assert(tm[2] == 4)
+    assert(tm[3] == 6)
+end
+do
+    local t = { 1, 2, 3, 4, 5 }
+    local tf = t:filtered(|n| -> n % 2 ~= 0)
+    assert(t[1] == 1)
+    assert(t[2] == 2)
+    assert(t[3] == 3)
+    assert(t[4] == 4)
+    assert(t[5] == 5)
+    assert(tf[1] == 1)
+    assert(tf[2] == nil)
+    assert(tf[3] == 3)
+    assert(tf[4] == nil)
+    assert(tf[5] == 5)
+end
+do
+    local t = { 1, 2, 3 }
+    local tr = t:reversed()
+    assert(t[1] == 1)
+    assert(t[2] == 2)
+    assert(t[3] == 3)
+    assert(tr[1] == 3)
+    assert(tr[2] == 2)
+    assert(tr[3] == 1)
+end
+do
+    local t = { 1, 2, 3 }
+    t[2] = nil
+    local tr = t:reordered()
+    assert(t[1] == 1)
+    assert(t[2] == nil)
+    assert(t[3] == 3)
+    assert(tr[1] == 1)
+    assert(tr[2] == 3)
+    assert(tr[3] == nil)
+end
+do
+    local menu = {
+        { id = 1, name = "Apple" },
+        { id = 2, name = "Banana" },
+    }
+    assert(menu:find(|item| -> item.id == 1).name == "Apple")
+    assert(menu:find(|item| -> item.id == 2).name == "Banana")
+    assert(menu:find(|item| -> item.id == 3) == nil)
+    assert(menu:findindex(|item| -> item.id == 1) == 1)
+    assert(menu:findindex(|item| -> item.id == 2) == 2)
+    assert(menu:findindex(|item| -> item.id == 3) == nil)
+end
+do
+    assert({ 1, 2, 3 }:checkall(|x| -> x % 2 == 0) == false)
+    assert({ 2, 4, 6 }:checkall(|x| -> x % 2 == 0) == true)
+end
+do
+    local t = { 1, 2, 3, "foo", "bar" }
+    assert(t:size() == 5)
+    t:clear()
+    assert(t:size() == 0)
+end
+do
+    assert(table.back({ "a", "b", "c" }) == "c")
+end
+do
+    local keys = table.keys{
+        a = 1,
+        b = 2,
+        c = 3
+    }
+    assert(#keys == 3)
+    assert(keys:contains("a"))
+    assert(keys:contains("b"))
+    assert(keys:contains("c"))
+end
+do
+    local test_table_1 = {1, 2, 2, 3, 1}
+    local counts_1 = test_table_1:countvalues()
+    assert(counts_1[1] == 2)
+    assert(counts_1[2] == 2)
+    assert(counts_1[3] == 1)
+
+    local test_table_2 = {1, 2, nil, 3, 1, nil}
+    local counts_2 = test_table_2:countvalues(1)
+    assert(counts_2[1] == 2)
+    assert(counts_2[2] == 1)
+    assert(counts_2[3] == 1)
+
+    local test_table_3 = {1, 2, 3, 4, 5}
+    local counts_3 = test_table_3:countvalues()
+    assert(counts_3[1] == 1)
+    assert(counts_3[2] == 1)
+    assert(counts_3[3] == 1)
+    assert(counts_3[4] == 1)
+    assert(counts_3[5] == 1)
+
+    local test_table_4 = {1, "hello", 1, "world", "hello"}
+    local counts_4 = test_table_4:countvalues()
+    assert(counts_4[1] == 2)
+    assert(counts_4["hello"] == 2)
+    assert(counts_4["world"] == 1)
+
+    local test_table_5 = {}
+    local counts_5 = test_table_5:countvalues()
+    assert(next(counts_5) == nil)
+
+    local test_table_6 = {1, {2}, 1, {2}, 3}
+    local counts_6 = test_table_6:countvalues()
+    for key, value in counts_6 do
+        if type(key) == "table" then
+            assert(value == 1)
+            continue
+        elseif key == 1 then
+            assert(value == 2)
+            continue
+        elseif key == 3 then
+            assert(value == 1)
+            continue
+        end
+        error()
+    end
+
+    local test_table_7 = { 1, 2, 3, 2, 3, 3, 4, test_table_6, nil, test_table_6 }:countvalues()
+    assert(test_table_7[1] == 1)
+    assert(test_table_7[2] == 2)
+    assert(test_table_7[3] == 3)
+    assert(test_table_7[4] == 1)
+    assert(test_table_7[test_table_6] == 2)
+end
+do
+    local t = {1, 2, 3, 4, 5}
+
+    assert(table.slice(t, 1, 3)[1] == 1)
+    assert(table.slice(t, 1, 3)[2] == 2)
+    assert(table.slice(t, 1, 3)[3] == 3)
+    assert(#table.slice(t, 1, 3) == 3)
+
+    assert(table.slice(t, -3, -1)[1] == 3)
+    assert(table.slice(t, -3, -1)[2] == 4)
+    assert(table.slice(t, -3, -1)[3] == 5)
+    assert(#table.slice(t, -3, -1) == 3)
+
+    assert(#table.slice(t, 6, 10) == 0)
+    assert(#table.slice(t, 2, 10) == 4)
+    assert(#table.slice(t, 0, 10) == #t)
+
+    -- Third argument is optional
+    assert(#table.slice(t, 3) == 3)
+    assert(table.slice(t, 3)[1] == 3)
+    assert(table.slice(t, 3)[2] == 4)
+    assert(table.slice(t, 3)[3] == 5)
+end
+do
+    local t = {1, 2, 3, 4, 5}
+    local chunk
+    chunk = t:chunk(3)
+    assert(chunk[1][1] == 1)
+    assert(chunk[1][2] == 2)
+    assert(chunk[1][3] == 3)
+    assert(chunk[2][1] == 4)
+    assert(chunk[2][2] == 5)
+    assert(chunk[2][3] == nil)
+    chunk = t:chunk(1)
+    assert(chunk[1][1] == 1)
+    assert(chunk[1][2] == nil)
+    assert(chunk[2][1] == 2)
+    assert(chunk[2][2] == nil)
+    assert(chunk[3][1] == 3)
+    assert(chunk[3][2] == nil)
+    assert(chunk[4][1] == 4)
+    assert(chunk[4][2] == nil)
+    assert(chunk[5][1] == 5)
+    assert(chunk[5][2] == nil)
+    assert(#{}:chunk(5) == 0)
+end
+do
+    assert(compareversions("0.1.0", "0.1.0") == 0)
+    assert(compareversions("0.1.0", "0.2.0") ~= 0)
+    assert(compareversions("0.2.0", "0.1.0") > 0)
+    assert(compareversions("0.2.0", "0.1.0") >= 0)
+    assert(compareversions("0.1.0", "0.2.0") < 0)
+    assert(compareversions("0.1.0", "0.1.0") <= 0)
+end
+do
+    assert(math.isnan(0 / 0) == true)
+    assert(math.isnan(69) == false)
+end
+do
+    local t = range(3)
+    assert(#t == 3)
+    assert(t[1] == 1)
+    assert(t[2] == 2)
+    assert(t[3] == 3)
+end
+do
+    local t = range(3, 6)
+    assert(#t == 4)
+    assert(t[1] == 3)
+    assert(t[2] == 4)
+    assert(t[3] == 5)
+    assert(t[4] == 6)
+end
+do
+    local t = range(1, 10, 2)
+    assert(#t == 5)
+    assert(t[1] == 1)
+    assert(t[2] == 3)
+    assert(t[3] == 5)
+    assert(t[4] == 7)
+    assert(t[5] == 9)
+end
+do
+    assert(range(10):min() == 1)
+    assert(range(10):max() == 10)
+end
+do
+    local mask = { 0xf0, 0x0f }
+    local data = { 0x11, 0x22, 0x33, 0x44 }
+    for i in data do
+        -- Old way: data[i] = data[i] ~ mask[((i - 1) % #mask) + 1]
+        data[i] = data[i] ~ mask:modget(i)
+    end
+    assert(data[1] == 0x11 ~ 0xf0)
+    assert(data[2] == 0x22 ~ 0x0f)
+    assert(data[3] == 0x33 ~ 0xf0)
+    assert(data[4] == 0x44 ~ 0x0f)
+end
+do
+    local test = { 1, 2, 3 }
+    test:modset(5, 5)
+    test:modset(6, 6)
+    assert(test[1] == 1)
+    assert(test[2] == 5)
+    assert(test[3] == 6)
+end
+do
+    local cat = require"pluto:cat"
+
+    local data = "List: With Value\n\tChild: With Value\n"
+    local t = cat.decode(data, "flat")
+    assert(t.List.__value == "With Value")
+    assert(t.List.Child == "With Value")
+    assert(cat.encode(t) == data)
+
+    data = "Hello: World\n"
+    t = cat.decode(data, "flat")
+    assert(t.Hello == "World")
+    assert(cat.encode(t) == data)
+
+    data = "First\nSecond"
+    t = cat.decode(data, "full")
+    assert(t[1].name == "First")
+    assert(t[2].name == "Second")
+
+    -- Metatable
+    data = "List: With Value\n\tChild: With Value\n"
+    t = cat.decode(data, "full")
+    assert(t.List.Child.value == "With Value")
+
+    -- Colons in keys
+    data = cat.encode({ ["Need: More"] = "Colons" })
+    t = cat.decode(data, "flat")
+    assert(t["Need: More"] == "Colons")
+
+    -- __order
+    assert(cat.encode({
+        __order = { "Hello", "World" },
+        Hello = ",",
+        World = "!",
+    }) == "Hello: ,\nWorld: !\n")
+
+    -- Value encoding
+    data = [[Text: "Look at this backslash: \\\r\nLook at this quote: \""]]
+    t = cat.decode(data, "flat")
+    assert(t["Text"] == "Look at this backslash: \\\r\nLook at this quote: \"")
+    data = cat.encode(t)
+    t = cat.decode(data, "flat")
+    assert(t["Text"] == "Look at this backslash: \\\r\nLook at this quote: \"")
+end
+do
+    local { base64, bigint, crypto } = require"*"
+
+    local key <const> = "A Top Secret Key"
+    local iv <const> = "My Top Secret IV"
+    local aadata <const> = "Additional authenticated data UwU"
+
+    assert(crypto.encrypt("Hello from Pluto", "aes-ecb", key) |> base64.encode == "v3WiSKT9g5TJfuq72QXVyg==")
+    assert(crypto.encrypt("Hello, world!", "aes-ecb-pkcs7", key) |> base64.encode == "YHB7hez0jYXtaxUqLj5qRw==")
+    assert(crypto.encrypt("Hello from Pluto", "aes-cbc", key, iv) |> base64.encode == "dyJWNeZQx6fjKr15cGd6Ng==")
+    assert(crypto.encrypt("Hello, world!", "aes-cbc-pkcs7", key, iv) |> base64.encode == "a3bHHwmClgOnNAVFUWgwAw==")
+    local enc, tag = crypto.encrypt("Hello from Pluto!", "aes-gcm", aadata, key, iv)
+    assert(base64.encode(enc) == "wR/89K4T9cGKI9baKR0s7xI=")
+    assert(base64.encode(tag) == "d62kzEuotTdpAgYTrzdPpQ==")
+
+    assert(crypto.decrypt(base64.decode("v3WiSKT9g5TJfuq72QXVyg=="), "aes-ecb", key) == "Hello from Pluto")
+    assert(crypto.decrypt(base64.decode("YHB7hez0jYXtaxUqLj5qRw=="), "aes-ecb-pkcs7", key) == "Hello, world!")
+    assert(crypto.decrypt(base64.decode("dyJWNeZQx6fjKr15cGd6Ng=="), "aes-cbc", key, iv) == "Hello from Pluto")
+    assert(crypto.decrypt(base64.decode("a3bHHwmClgOnNAVFUWgwAw=="), "aes-cbc-pkcs7", key, iv) == "Hello, world!")
+    assert(crypto.decrypt(base64.decode("wR/89K4T9cGKI9baKR0s7xI="), "aes-gcm", aadata, key, iv, base64.decode("d62kzEuotTdpAgYTrzdPpQ==")) == "Hello from Pluto!")
+
+    local priv = {
+        p = bigint.new("3835446257"),
+        q = bigint.new("3714629299"),
+    }
+    local pub = {
+        n = priv.p * priv.q, -- 14247261040992083843
+        e = bigint.new(0x10001),
+    }
+
+    enc = crypto.encrypt("Hi", "rsa", pub)
+    assert(base64.encode(enc) == "w1v3stxRHCs=")
+    assert(crypto.decrypt(enc, "rsa", priv) == "Hi")
+
+    enc = crypto.encrypt("Hi", "rsa", priv)
+    assert(base64.encode(enc) == "GClnRNYar5c=")
+    assert(crypto.decrypt(enc, "rsa", pub) == "Hi")
+
+    priv = {
+        p = bigint.new("115443384115231951475820445136871322101870729500298182134363293112660251666017"),
+        q = bigint.new("98365361248415863235179644468056200977592391948608651522703704315152579004021"),
+    }
+    pub = {
+        n = priv.p * priv.q, -- 11355630182234424425429331560518598643298965915936825610957270519615363349759012613228119611304846673085167794661819394470107090216347491908311079792054357
+        e = bigint.new(0x10001),
+    }
+
+    local sig = crypto.sign("Pluto is certified cool", "rsa-sha1", priv)
+    assert(crypto.verify("Pluto is certified cool", "rsa-sha1", pub, sig))
+
+    local pem = priv |> crypto.exportkey|"pem"|
+    local reimported = pem |> crypto.importkey|"pem"|
+    assert(reimported.p == priv.p)
+    assert(reimported.q == priv.q)
+end
+do
+    local bigint = require "pluto:bigint"
+
+    do
+        local q, r = new bigint(10):div(new bigint(3))
+        assert(q:tostring() == "3")
+        assert(r:tostring() == "1")
+    end
+
+    do
+        local n = bigint.new("11355630182234424425429331560518598643298965915936825610957270519615363349759012613228119611304846673085167794661819394470107090216347491908311079792054357")
+        assert(n:hex() == "D8D12A03AE2F14B16CBFDF160FF7AC97911862B3D048F18E3B95E909A08D91AAD4BA48D8A1FE4EBC555782FDE14D13085A35F6F62D57A4F86CE1FF32503A9055")
+        assert(n:bitlength() == 512)
+    end
+end
+do
+    local { scheduler } = require "*"
+
+    -- Test contains
+    do
+        local sched = new scheduler()
+        local t = sched:add(function() end)
+        sched:add(function()
+            while sched:contains(t) do
+                coroutine.yield()
+            end
+        end)
+        sched:run()
+    end
+
+    -- Test remove
+    do
+        local sched = new scheduler()
+        local t = sched:add(function() end)
+        local ok = false
+        sched:add(function()
+            assert(sched:contains(t) == true)
+            sched:remove(t)
+            assert(sched:contains(t) == false)
+            coroutine.yield()
+            ok = true
+        end)
+        sched:run()
+        assert(ok)
+    end
+end
+do
+    local { scheduler, socket } = require "*"
+
+    local sched = new scheduler()
+    sched:add(function()
+        local l = socket.listen(30724)
+        local s = l:accept()
+        assert(s:getside() == "server")
+        while data := s:recv() do
+            s:send(data)
+        end
+        assert(s:isopen() == false)
+    end)
+    sched:add(function()
+        local s = socket.connect("127.0.0.1", 30724)
+        assert(s)
+        assert(s:isopen() == true)
+        assert(s:getside() == "client")
+        assert(select(2, s:getpeer()) == 30724)
+        assert(s:peek() == nil)
+        s:send("Hello")
+        while s:peek() == nil do
+            coroutine.yield()
+        end
+        assert(s:peek() == "Hello")
+        assert(s:recv() == "Hello")
+        assert(s:peek() == nil)
+        s:close()
+        assert(s:isopen() == false)
+    end)
+    sched:run()
+end
+do
+    local regex = require "pluto:regex"
+
+    local pattern = new regex [[/^the (only )?one$/i]]
+    assert(pattern:match("THE ONE"))
+    assert(not pattern:match("NOT THE ONE"))
+
+    pattern = new regex [[/anywhere from (\d+) to (\d+)/]]
+    local match = pattern:match("anywhere from 3 to 5")
+    assert(match)
+    assert(match[0] == "anywhere from 3 to 5")
+    assert(match[1] == "3")
+    assert(match[2] == "5")
+end
+
+print "Testing default table metatable."
+do
+    -- Note: This behavior may be disabled by defining the PLUTO_NO_DEFAULT_TABLE_METATABLE macro.
+
+    local t = { "apple", "banana" }
+    assert(t:contains("apple") == 1)
+    assert(t:contains("banana") == 2)
+    assert(t:contains("orange") == nil)
+end
+do
+    -- os.time in Lua may use __index to find fields, which is problematic as it will find the non-number field 'min'
+    -- So, we patch it to rawget, instead.
+    assert(os.time{year=2000, month=1, day=1})
+end
+
+-- 'thread' type is given a metatable by Pluto
+do
+    local coro = coroutine.create(function() end)
+    assert(coro:status() == "suspended")
+end
+
+print "Testing default arguments."
+do
+    local CONST_VAL <const> = 69
+    local function f(a = 1, b = CONST_VAL, c = -2, d = +3, e = "Hello")
+        return a, b, c, d, e
+    end
+    local a, b, c, d, e = f()
+    assert(a == 1)
+    assert(b == 69)
+    assert(c == -2)
+    assert(d == +3)
+    assert(e == "Hello")
+
+    local function tf(t = { 1, 2, 3 })
+        return t
+    end
+    local t = tf()
+    assert(#t == 3)
+    assert(t[1] == 1)
+    assert(t[2] == 2)
+    assert(t[3] == 3)
+end
+do
+    local function f(a = true)
+        return a
+    end
+    assert(f() == true)
+    assert(f(false) == false)
+end
+do
+    local t = {
+        function foo(a = "hello")
+            return a
+        end
+    }
+    function t:bar(a = "world")
+        return a
+    end
+    assert(t:foo() == "hello")
+    assert(t:bar() == "world")
+end
+do
+    local f = |a = "No comment"| -> a
+    assert(f() == "No comment")
+    assert(f("Hello") == "Hello")
+end
+
+print "Testing walrus operator."
+do
+    if a := 3 then
+        assert(a == 3)
+    else
+        error()
+    end
+
+    if _b := nil then
+        error()
+    end
+
+    -- Complex Context: Walrus in function body of a lambda function that is passed an argument
+    local function executeFunc(f)
+        f()
+    end
+    executeFunc(function()
+        if c := 3 then
+            assert(c == 3)
+        else
+            error()
+        end
+    end)
+    executeFunc(|| -> do
+        if c := 3 then
+            assert(c == 3)
+        else
+            error()
+        end
+    end)
+
+    -- New local for each loop iteration (if it were the same local, capturing it could result in stack corruption.)
+    do
+        local cnt=10
+        local function next()
+            cnt=cnt-1
+            if cnt == 0 then return false end
+            return cnt
+        end
+
+        local t = {}
+        while a:=next() do
+            t[#t+1] = ||->a
+        end
+        assert(t[1]() == 9)
+        assert(t[2]() == 8)
+        assert(t[3]() == 7)
+        assert(t[4]() == 6)
+        assert(t[5]() == 5)
+        assert(t[6]() == 4)
+        assert(t[7]() == 3)
+        assert(t[8]() == 2)
+        assert(t[9]() == 1)
+    end
+end
+do -- Local can be used for subsequent binary operators
+    local function initfunc(overwrite)
+        return overwrite ? overwrite : "foobar"
+    end
+
+    if (a := initfunc()) ~= 0 then
+        assert(a == "foobar")
+    else
+        error()
+    end
+
+    local reached = false
+    if (_a := initfunc(0)) ~= 0 then
+    else
+        reached = true
+    end
+    assert(reached)
+end
+do -- Method calls as well
+    local class Obj
+        function isValid()
+            return true
+        end
+    end
+
+    local function getobj()
+        return new Obj()
+    end
+
+    if (inst := getobj()):isValid() then
+        assert(inst)
+    end
+end
+do -- Can be used in subexpressions
+    local function getvalue()
+        return 0
+    end
+
+    local val = 0
+
+    if val >= 0 and val == (cur := getvalue()) then
+        assert(cur == 0)
+    end
+end
+do -- Variable is scoped to its block
+    -- @pluto_warnings disable-next
+    if (walrusvar := 1) and false then
+    else
+        assert(walrusvar == nil)
+    end
+end
+do -- And may not be used in 'or' expressions
+    assert(load[[if false or (a := true) then print(a) end]] == nil)
+    assert(load[[if (false and (a := true)) or true then print(a) end]] == nil)
+end
+do -- Unary operators
+    local function getstr()
+        return "hello"
+    end
+    if #(str := getstr()) == 5 then
+        assert(str == "hello")
+    else
+        error()
+    end
+end
+
+print "Testing for-as loop."
+do
+    local t = { "a", "b", "c" }
+    local k = 1
+    for t as v do
+        assert(t[k] == v)
+        k = k + 1
+    end
+
+    local function choose(_) return { "for", "as" } end
+    for choose(function() for a as i_should_not_exist do end end) as x do
+        assert(i_should_not_exist == nil, i_should_not_exist)
+        assert(x == "for" or x == "as", x)
+    end
+end
+
+print "Testing enums."
+do
+    enum begin
+        UTE_ONE,
+        UTE_TWO,
+    end
+    assert(UTE_ONE == 1)
+    assert(UTE_TWO == 2)
+
+    enum do
+        UTE2_ONE,
+        UTE2_TWO,
+    end
+    assert(UTE2_ONE == 1)
+    assert(UTE2_TWO == 2)
+
+    enum NamedTestEnum begin
+        NTE_ONE,
+        NTE_TWO
+    end
+    assert(NTE_ONE == 1)
+    assert(NTE_TWO == 2)
+
+    enum CStyleEnum do
+        CSE_INIT = 0,
+        CSE_CONTINUED
+    end
+    assert(CSE_INIT == 0)
+    assert(CSE_CONTINUED == 1)
+
+    enum UnaryTestEnum begin
+        UNAR_INVALID = -1,
+        UNAR_ONE = +1
+    end
+    assert(UNAR_INVALID == -1)
+    assert(UNAR_ONE == +1)
+
+    enum ConstyEnum begin
+        CST_VAL = 1,
+        CPY_VAL = CST_VAL,
+    end
+    assert(CST_VAL == 1)
+    assert(CPY_VAL == 1)
+
+    enum RelativeEnum begin
+        RE_MAGIC = 42,
+        RE_MAGIC_PLUS_2 = RE_MAGIC + 2
+    end
+    assert(RE_MAGIC == 42)
+    assert(RE_MAGIC_PLUS_2 == 44)
+end
+do
+    enum class colours begin
+        red,
+        green,
+        blue
+    end
+    assert(colours.red == 1)
+    assert(colours.green == 2)
+    assert(colours.blue == 3)
+    assert(red == nil)
+    assert(green == nil)
+    assert(blue == nil)
+end
+
+print "Testing interpolated strings."
+do
+    f_string_global = "foo"
+    local f_string_local = "bar"
+    assert($"a{f_string_global}b{f_string_local}c" == "afoobbarc")
+    assert($"{f_string_global}{f_string_local}" == "foobar")
+end
+do
+    local t = { a = "hello" }
+    assert($"{t.a} world" == "hello world")
+    assert($'{t.a} world' == "hello world")
+
+    local class Person
+        name;
+        age;
+
+        function __construct(name, age)
+            self.name = name
+            self.age = age
+        end
+
+        function printInformation()
+            return $"My name is {self.name} & my age is {self.age}."
+        end
+    end
+
+    local person = new Person("John", 25)
+    assert($"{person:printInformation()}" == "My name is John & my age is 25.")
+end
+-- @pluto_warnings: disable-next
+assert($"{true ? 'true' : 'false'} is the value" == "true is the value")
+do -- escaping
+    local a = "world"
+    assert($"hello {a}, \{}" == "hello world, {}")
+    assert($"hello {a}, {1 == 1}, \{1 == 1}" == "hello world, true, {1 == 1}")
+    assert($"hello {a}, {1 == 1}, \\{1 == 1}" == "hello world, true, \\true")
+end
+
+print "Testing ++ operator."
+do
+    -- expression
+    local a = 1
+    assert(++a == 2)
+    assert(a == 2)
+end
+do
+    -- statement
+    local a = 1
+    ++a
+    assert(a == 2)
+
+    local t = { a = 1 }
+    ++t.a
+    assert(t.a == 2)
+end
+
+print "Testing non-ascii variable names."
+do
+    local 😉 = "Hello"
+    assert(😉 == "Hello")
+end
+
+print "Testing binary numerals."
+do
+    assert(0b11 == 3)
+end
+
+print "Testing boolean concatenation."
+do
+    assert(("aussie version is " .. true) == "aussie version is true")
+    assert((true .. false) == "truefalse")
+end
+
+print "Testing constant expressions."
+do
+    assert($crypto.joaat("Pluto") == 32037948)
+
+    -- They can be chained
+    assert($crypto.joaat($crypto.sha256("hello")) == 329026960)
+
+    -- They accept compile-time constants as argument
+    local str <const> = "Pluto"
+    assert($crypto.joaat(str) == 32037948)
+
+    -- Can handle table return value
+    local t = $url.parse("https://google.com")
+    assert(t.scheme == "https")
+    assert(t.host == "google.com")
+end
+
+print "Testing named arguments."
+do
+    local function getGreeting(greeting, name = "Universe")
+        return greeting .. ", " .. name .. "!"
+    end
+    assert(getGreeting(greeting="Hello", name="World") == "Hello, World!")
+    assert(getGreeting(greeting="Hello") == "Hello, Universe!")
+    assert(getGreeting(name="World", greeting="Hello") == "Hello, World!")
+
+    local function getName()
+        return "Planet"
+    end
+    assert(getGreeting(name=getName(), greeting="Hello") == "Hello, Planet!")
+
+    local function mixedArgs(file, mode = "r", version = 1)
+        return file, mode, version
+    end
+    local file, mode, version = mixedArgs("Hello", version = 2)
+    assert(file == "Hello")
+    assert(mode == "r")
+    assert(version == 2)
+end
+
+print "Testing classes."
+do
+    local a, b
+    class BaseClass
+        function __construct()
+            a = true
+        end
+    end
+
+    class ClassWithAnExceptionallySpecificAndLongName extends BaseClass
+        function __construct()
+            parent:__construct()
+            b = true
+        end
+    end
+
+    local _inst = new ClassWithAnExceptionallySpecificAndLongName()
+    assert(a == true and b == true)
+end
+do
+    do
+        class globalclass
+        end
+        local class localclass
+        end
+        assert(localclass ~= nil)
+    end
+    assert(globalclass ~= nil)
+    assert(localclass == nil)
+end
+do
+    local classexpr = class
+        b = true
+    end
+    assert(classexpr.b == true)
+end
+do
+    local Entity = {
+        age = 1
+    }
+
+    local class Human extends Entity
+    end
+
+    local e = new Entity()
+    local h = new Human()
+    assert(e.age == 1)
+    assert(h.age == 1)
+    assert(e instanceof Entity == true)
+    assert(e instanceof Human == false)
+    assert(h instanceof Entity == true)
+    assert(h instanceof Human == true)
+
+    local a, b = (new Entity() instanceof Entity)
+    assert(a == true)
+    assert(b == nil)
+    assert(new Human() instanceof Entity)
+end
+do
+    local class Entity
+        __name = "Entity"
+
+        function __construct(name)
+            self.name = name
+        end
+    end
+
+    local class Human extends Entity
+        __name = "Human"
+
+        function __construct(name)
+            assert(parent.__name == "Entity")
+            parent:__construct(name)
+        end
+    end
+
+    local john = new Human("John")
+    assert(john.name == "John")
+    assert(john instanceof Entity)
+    assert(john instanceof Human)
+end
+-- Multi-level parent calls
+do
+    class Entity
+        function __construct(name)
+            self.name = name
+        end
+    end
+
+    class Character extends Entity
+        function __construct(name)
+            parent:__construct(name)
+        end
+    end
+
+    class Player extends Character
+        function __construct(name)
+            parent:__construct(name)
+        end
+    end
+
+    local p = new Player("John")
+    assert(p.name == "John")
+end
+-- Overriding '__index'
+do
+    $define extraOffset = 10
+
+    class Counter
+        __num = 1
+
+        function __index(key)
+            if key == "num" then
+                return self.__num + extraOffset
+            end
+            return Counter[key]
+        end
+
+        function __newindex(key, value)
+            if key == "num" then
+                self.__num = value - extraOffset
+            end
+            rawset(self, key, value)
+        end
+    end
+
+    local c = new Counter()
+    assert(c.num == 1 + extraOffset)
+    c.num = 42
+    assert(c.num == 42)
+end
+do
+    local class Base
+        base_member = 1
+    end
+
+    local Derived
+    class Derived extends Base
+        derived_member = 2
+
+        function __index(key)
+            if key == "magic" then
+                return 3
+            end
+            return Derived[key]
+        end
+    end
+
+    local inst = new Derived()
+    assert(inst.base_member == 1)
+    assert(inst.derived_member == 2)
+    assert(inst.magic == 3)
+    inst.derived_member += 10
+    inst.user_defined = 4
+    assert(inst.derived_member == 12)
+    assert(inst.user_defined == 4)
+end
+-- Metamethod inheritance
+do
+    local class Base
+        function __tostring()
+            return "A based object"
+        end
+
+        function __call()
+            return "You called?"
+        end
+    end
+
+    local class Child extends Base
+        function __tostring()
+            return parent:__tostring() .. ": The sequel"
+        end
+    end
+
+    local b = new Base()
+    local c = new Child()
+
+    assert(tostring(b) == "A based object")
+    assert(tostring(c) == "A based object: The sequel")
+
+    assert(b() == "You called?")
+    assert(c() == "You called?")
+end
+do
+    local class _ClassParsingTest
+        property_no_value
+        property_type_hint: string
+
+        public property_public
+        --protected property_protected
+        private property_private
+    end
+end
+-- Constructor promotion
+do
+    local class Point
+        function __construct(public x: int, public y: int = 0)
+        end
+    end
+
+    local p = new Point(3)
+    assert(p.x == 3)
+    assert(p.y == 0)
+
+    assert(select(2, load[[class Item
+    function __constructor(private name: string, private type: string)
+    end
+end]]):find("attempt to use constructor promotion outside of '__construct'"))
+    -- @pluto_warnings disable-next ('public' is unused)
+    local function _valid_syntax(public) end
+end
+-- 'new' as a statement
+do
+    local ctored = false
+    local method_called = false
+
+    local class TestClass
+        function __construct()
+            ctored = true
+        end
+
+        function method()
+            method_called = true
+        end
+    end
+
+    new TestClass()
+    assert(ctored == true)
+    assert(method_called == false)
+end
+do
+    local ctored = false
+    local method_called = false
+
+    local class TestClass
+        function __construct()
+            ctored = true
+        end
+
+        function method()
+            method_called = true
+        end
+    end
+
+    new TestClass():method()
+    assert(ctored == true)
+    assert(method_called == true)
+end
+do
+    local namespace = {}
+
+    class namespace.Base end
+    class namespace.Derived extends namespace.Base end
+
+    assert(new namespace.Base() instanceof namespace.Base)
+    assert(new namespace.Derived() instanceof namespace.Base)
+end
+do
+    local class Class
+        private whatever = 69
+
+        function __construct(private promoted)
+        end
+
+        function getWhatever()
+            return self.whatever
+        end
+
+        function getPromoted()
+            return self.promoted
+        end
+    end
+
+    local inst = new Class(1337)
+    assert(inst.whatever == nil)
+    assert(inst.promoted == nil)
+    inst.whatever = 42
+    inst.promoted = 42
+    assert(inst:getWhatever() == 69)
+    assert(inst:getPromoted() == 1337)
+end
+-- Extending from global should not unexpectedly push _G
+do
+    class GlobalClass end
+
+    local class ExtendsGlobalExpression1 extends GlobalClass
+        function checkMembers()
+        end
+    end
+
+    local class ExtendsGlobalExpression2 extends GlobalClass
+        function checkMembers()
+        end
+    end
+
+    new ExtendsGlobalExpression1(1):checkMembers()
+    new ExtendsGlobalExpression2(1):checkMembers()
+
+    GlobalClass = nil
+end
+-- Order independent private methods / fields / preprocessing
+do
+    local t = {}
+    local class MyClass
+        function __construct(private a)
+            self.var1 = "1"
+            self.var2 = "2"
+            self.var3 = "3"
+            assert(self["var1"] == nil)
+            assert(self["__restricted__var1"] == "1")
+        end
+
+        public function getPublic()
+            if a then else end
+            if a do else end
+            local _a = || -> do end
+            enum A begin
+            end
+            class Foo do end
+            class t.Foo begin end
+            local _MuhClass = class end
+            local _MuhClass2 = class begin end
+            local _MuhClass3 = pluto_class end
+            local _MuhClass4 = pluto_class begin end
+            local _MuhClass5 = pluto_class private a; end
+            local _MuhClass6 = pluto_class begin private a; end
+            enum class MyEnumClass begin end
+            do end
+            return self:getPrivate()
+        end
+
+        private function getPrivate()
+            return self.a
+        end
+
+        private var1
+        private var2,
+        private var3;
+
+        function doSwitch(x)
+            switch x do
+                case 1:
+                    return "One"
+                case 2:
+                    return "Two"
+            end
+        end
+    end
+
+    local var = new MyClass("a")
+
+    assert(var:getPublic() == "a")
+    assert(var.__restricted__getPrivate ~= nil)
+    assert(var.getPrivate == nil)
+    assert(t.Foo ~= nil)
+    assert(var.var1 == nil)
+    assert(var.var2 == nil)
+    assert(var.var3 == nil)
+    assert(var.__restricted__var1 == "1")
+    assert(var.__restricted__var2 == "2")
+    assert(var.__restricted__var3 == "3")
+    assert(var:doSwitch(1) == "One")
+    assert(var:doSwitch(2) == "Two")
+end
+
+print "Testing named varargs."
+do
+    local function f(...a)
+        return a
+    end
+    local t = f("Hello", 1337)
+    assert(#t == 2)
+    assert(t[1] == "Hello")
+    assert(t[2] == 1337)
+end
+do
+    local f = |...args| -> table.size(args)
+    assert(f() == 0)
+    assert(f(1) == 1)
+    assert(f(1, 2) == 2)
+end
+
+print "Testing optional parentheses."
+do
+    assert("a.b.c":split(".")[1] == "a")
+
+    assert({
+        static function test()
+            return "hello"
+        end
+    }.test() == "hello")
+end
+do
+    local piped
+    local function consumer(x)
+        piped = x
+    end
+
+    ;"Hello" |> consumer
+    assert(piped == "Hello")
+
+    ;"Hello":upper() |> consumer
+    assert(piped == "HELLO")
+end
+
+print "Testing table destructuring."
+do
+    -- Table in dedicated variable
+    local t = {
+        str = "hello",
+        i = 1337
+    }
+    do
+        local { str } = t
+        assert(str == "hello")
+    end
+    do
+        local { i } = t
+        assert(i == 1337)
+    end
+    do
+        local { str, i } = t
+        assert(str == "hello")
+        assert(i == 1337)
+    end
+end
+do
+    -- Temporary table
+    local { i, str = s } = {
+        i = 69,
+        s = "Hello"
+    }
+    assert(i == 69)
+    assert(s == nil)
+    assert(str == "Hello")
+end
+do
+    -- Temporary table, single field
+    local { i } = {
+        i = 69,
+        s = "Hello"
+    }
+    assert(i == 69)
+end
+-- Array destructuring
+do
+    local [a, b, c] = { 1, 2, 3 }
+    assert(a == 1)
+    assert(b == 2)
+    assert(c == 3)
+end
+do
+    local t = { 1, 2, 3 }
+    local [a, b, c] = t
+    assert(a == 1)
+    assert(b == 2)
+    assert(c == 3)
+end
+
+print "Testing pluto_use."
+do
+    pluto_use class = false
+
+    local class = { class = "class" }
+    assert(class.class == "class")
+
+    pluto_use class
+
+    class Human end
+
+    load[[pluto_use "0.9.0+"
+    try
+        error("deez")
+    catch _ do
+    end
+
+    pluto_use * = false
+    local catch = "bass"
+    assert(catch == "bass")
+    ]]()
+
+    -- Superfluous tokens after pluto_use annotation are ignored
+    assert(load[[--@pluto_use * = false   Some comment here
+    return true]]() == true)
+end
+
+print "Testing compile-time conditionals."
+do
+    local debug_bytecode = string.dump(load([[
+        $define DEBUG = true
+        $if DEBUG then
+            print("Script running in debug mode")
+        $else
+            print("Script running in release mode")
+        $end
+    ]], ""))
+    local release_bytecode = string.dump(load([[
+        $define DEBUG = false
+        $if DEBUG do
+            print("Script running in debug mode")
+        $else
+            print("Script running in release mode")
+        $end
+    ]], ""))
+
+    assert(debug_bytecode:find("Script running in debug mode") ~= nil)
+    assert(debug_bytecode:find("Script running in release mode") == nil)
+    assert(release_bytecode:find("Script running in debug mode") == nil)
+    assert(release_bytecode:find("Script running in release mode") ~= nil)
+
+    local function elseif_test()
+        $if false then
+            return "branch 1"
+        $elseif true then
+            return "branch 2"
+        $else
+            return "branch 3"
+        $end
+    end
+    assert(elseif_test() == "branch 2")
+end
+
+print "Testing try/catch."
+do
+    -- Test case: Try does not return
+    local function test(x)
+        local ret
+        try
+            if x then
+                error("error", 0)
+            end
+            ret = true
+        catch _ then
+            ret = false
+        end
+        return ret
+    end
+    assert(test(false) == true)
+    assert(test(true) == false)
+end
+do
+    -- Test case: Try does return
+    local function test(x)
+        try
+            if x then
+                error("error", 0)
+            end
+            return true, "ok"
+        catch e then
+            return false, e
+        end
+    end
+    local b, s = test(false)
+    assert(b == true)
+    assert(s == "ok")
+    b, s = test(true)
+    assert(b == false)
+    assert(s == "error")
+end
+do
+    -- Should work seamlessly with vararg functions
+    local function ensure_error(callback, ...)
+        try
+            callback(...)
+        catch e then
+            return e
+        end
+    end
+    assert(ensure_error(error, { what = "err" }).what == "err")
+end
+do
+    -- Nil values should be returned as nil, not void.
+    -- (This is most noticable with functions such as print which would say "" instead of "nil")
+    local function f()
+        try
+            return nil
+        catch _ do
+        end
+    end
+    assert(table.pack(f()).n == 1)
+end
+do
+    -- If try block returns, catch block needs to jump over the try-return code (in case it doesn't return.)
+    local function f()
+        try
+            return error("deez")
+        catch _ then
+        end
+        return true
+    end
+    assert(f() == true)
+end
+do
+    -- Test gotos, break and continues in try body as well as nested try/catch blocks
+    local function testtry(state, p)
+        goto start
+        ::b::
+        do
+            return 11
+        end
+        ::start::
+        while true do
+            if state < 0 then return 10 end
+            while true do
+                if state < 0 then return 10 + state end
+                try
+                    if state == 0 then return end
+                    if state == 1 then return 1, p() end
+                    if state == 2 then return 2, p end
+                    if state == 3 then break end
+                    if state == 4 then break 1 end
+                    if state == 5 then break 2 end
+                    if state == 6 then goto e end
+                    if state == 7 then state = -2 continue end
+                    if state == 8 then state = -1 continue 1 end
+                    if state == 9 then state = -1 continue 2 end
+                    if state == 10 then goto b end
+                    if state == 27 then return 27 end
+                    if state == 28 then return 28, p, p end
+                    if state ~= 11 then
+                        try
+                            if state == 12 then return end
+                            if state == 13 then return 13, p() end
+                            if state == 14 then return 14, p end
+                            if state == 15 then break end
+                            if state == 16 then break 1 end
+                            if state == 17 then break 2 end
+                            if state == 18 then goto e end
+                            if state == 19 then state = -2 continue end
+                            if state == 20 then state = -1 continue 1 end
+                            if state == 21 then state = -1 continue 2 end
+                            if state == 22 then goto b end
+                            if state == 23 then goto c end
+                            if state == 25 then return 25 end
+                            if state == 26 then return 26, p, p end
+                        catch ee then
+                            return 12, ee
+                        end
+                    end
+                    goto skip
+                    ::c::
+                    do return 15 end
+                    ::skip::
+                catch e then
+                    return 3, e
+                end
+                return 4
+            end
+            return 5
+        end
+        do
+            return 6
+        end
+        ::e::
+        return 7
+    end
+
+    local function reteq(...)
+        local n = select('#', ...)
+        local tab = {...}
+        return function(...)
+            if n ~= select('#', ...) then return false end
+            for i = 1, n do
+                if select(i, ...) ~= tab[i] then return false end
+            end
+            return true
+        end
+    end
+
+    assert(select('#', testtry(0)) == 0)
+    assert(reteq(1, 2)(testtry(1, ||->2)))
+    assert(reteq(1)(testtry(1, function()end)))
+    assert(reteq(1, 2, 3, 4, 5)(testtry(1, function() return 2, 3, 4, 5 end)))
+    local t = {}
+    assert(reteq(3, t)(testtry(1, ||->error(t))))
+    assert(reteq(2, nil)(testtry(2)))
+    assert(reteq(2, 4)(testtry(2, 4)))
+    assert(reteq(5)(testtry(3)))
+    assert(reteq(5)(testtry(4)))
+    assert(reteq(6)(testtry(5)))
+    assert(reteq(7)(testtry(6)))
+    assert(reteq(8)(testtry(7)))
+    assert(reteq(9)(testtry(8)))
+    assert(reteq(10)(testtry(9)))
+    assert(reteq(11)(testtry(10)))
+    assert(reteq(4)(testtry(11)))
+    assert(reteq(27)(testtry(27)))
+    assert(reteq(28, nil, nil)(testtry(28)))
+    assert(reteq(28, 4, 4)(testtry(28, 4)))
+
+    assert(select('#', testtry(12)) == 0)
+    assert(reteq(13, 2)(testtry(13, ||->2)))
+    assert(reteq(13)(testtry(13, function()end)))
+    assert(reteq(13, 2, 3, 4, 5)(testtry(13, function() return 2, 3, 4, 5 end)))
+    assert(reteq(12, t)(testtry(13, ||->error(t))))
+    assert(reteq(14, nil)(testtry(14)))
+    assert(reteq(14, 4)(testtry(14, 4)))
+    assert(reteq(5)(testtry(15)))
+    assert(reteq(5)(testtry(16)))
+    assert(reteq(6)(testtry(17)))
+    assert(reteq(7)(testtry(18)))
+    assert(reteq(8)(testtry(19)))
+    assert(reteq(9)(testtry(20)))
+    assert(reteq(10)(testtry(21)))
+    assert(reteq(11)(testtry(22)))
+    assert(reteq(15)(testtry(23)))
+    assert(reteq(4)(testtry(24)))
+    assert(reteq(25)(testtry(25)))
+    assert(reteq(26, nil, nil)(testtry(26)))
+    assert(reteq(26, 4, 4)(testtry(26, 4)))
+end
+do
+    -- Export in try body
+    local function f()
+        try
+            -- @pluto_warnings disable-next (export is deprecated)
+            export function a() end
+        catch _ then
+        end
+    end
+
+    assert(type(f().a)=='function')
+end
+
+print "Testing compatibility."
+do
+    local a = "Hi"
+    local t = {a}
+    assert(t[1] == "Hi")
+    t = {a, nil}
+    assert(t[1] == "Hi")
+    t = {["func"]=function(_p1,_p2)end}
+    assert(t["func"] ~= nil)
+
+    local myconst <const> = "consty"
+    assert(myconst == "consty")
+
+    if true then
+        goto if_then_goto_test
+        ::if_then_goto_test::
+    end
+end
+do -- Reserved Identifiers
+    local t = {
+        class = "key",
+        while = "another key",
+    }
+    assert(t.class == "key")
+    assert(t.while == "another key")
+
+    for i = 1, 10 do
+        if i == 5 then
+            goto continue
+        end
+        ::continue::
+    end
+
+    for i = 1, 10 do
+        if i == 5 then
+            goto while
+        end
+        ::while::
+    end
+
+    -- This should still be an error
+    assert(load[[return break]] == nil)
+    assert(load[[return while]] == nil)
+end
+do
+    local function compat_names(default, parent)
+        assert(default == 1)
+        assert(parent == 2)
+    end
+    local default = 1
+    local parent = 2
+    compat_names(default, parent)
+end
+do
+    local compat_parent_shorthand_syntaxes = {
+        parent = true
+    }
+    assert(compat_parent_shorthand_syntaxes.parent == true)
+end
+-- 'parent' may also defer to global, raising a warning when it does
+load([[
+    -- @pluto_warnings disable-bad-practice
+    assert(parent)
+    assert(parent.f() == "hello")
+    assert(parent:f() == "hello")
+]], "", "t", { assert = assert, parent = { f = || -> "hello" } })()
+
+do
+    local t = {
+        new = function() return 69 end
+    }
+    assert(t:new() == 69)
+end
+do
+    local t = { "a", "b", "c" }
+    for k, v in t do
+        assert(t[k] == v)
+    end
+end
+assert(("deez" .. 69) == "deez69")
+do
+    local a = ""
+    (function (x) a=x end)("hello")
+    assert(a == "hello")
+end
+do
+    local _t = {}
+    ("test string"):len()
+end
+do
+    -- Generalized Iteration should ignore tables that have '__call' metamethods
+    local called_mm, iterated = false, false
+    local t = { 1 }
+    setmetatable(t, {
+        __call = function()
+            called_mm = true
+        end
+    })
+    for _ in t do
+        iterated = true
+    end
+    assert(called_mm)
+    assert(not iterated)
+end
+do
+    -- Possible miscompilation from compile-time concat optimization that was not caught by Lua's test suite
+    assert(((true and "hello" or "goodbye") .. "world") == "helloworld")
+end
+assert({ load[[if then print("hello")]] }[2]:contains[[unexpected symbol near 'then']])
+do
+    local function well_in_that(case)
+        return case
+    end
+    assert(well_in_that("case") == "case")
+end
+do
+    local function tofs(t)
+        local f
+        f=|s|->do
+            t:insert(s)
+            return f
+        end
+        return f
+    end
+    do
+        local t = {}
+        tofs(t) "abc" "def"
+        assert(#t == 2)
+        assert(t[1] == "abc")
+        assert(t[2] == "def")
+    end
+    do
+        local t = {}
+        tofs(t) "abc""def"
+        assert(#t == 2)
+        assert(t[1] == "abc")
+        assert(t[2] == "def")
+    end
+end
+do
+    -- We can infer that a keyword should be disabled
+    assert(load[[-- @pluto_warnings disable-unused
+        local new = true
+    ]])
+    assert(load[[-- @pluto_warnings disable-unused
+        function update_value(new) end
+    ]])
+    assert(load[[-- @pluto_warnings disable-unused
+        class = {}
+    ]])
+    assert(load[[-- @pluto_warnings disable-unused
+        class.mem = 1
+    ]])
+    assert(load[[-- @pluto_warnings disable-unused
+        class[1] = 1
+    ]])
+    assert(load[[-- @pluto_warnings disable-unused
+        class:mem()
+    ]])
+end
+
+print "Testing universal functions."
+do
+    os.setlocale("fr-FR.UTF-8")
+
+    pcall(|| -> utonumber("", 69))
+    assert(utonumber("1337") == 1337)
+    assert(utonumber("1337", 16) == 0x1337)
+
+    pcall(|| -> utostring())
+    assert(utostring(1337) == "1337")
+
+    pcall(|| -> string.uformat("%f", ""))
+    assert(string.uformat("%.2f", 4.20) == "4.20")
+end
+
+print "Testing spaceship operator."
+do
+    assert(0 <=> 0 == 0)
+    assert(0 <=> 1 == -1)
+    assert(1 <=> 0 == +1)
+
+    local function get_val()
+        return 1
+    end
+    assert(get_val() <=> get_val() == 0)
+end
+
+print "Testing implicit/explicit global creation."
+do
+    assert_warn [[pluto_use global; a = 1]]
+    assert_warn [[pluto_use global; function a() end]]
+    assert_warn [[pluto_use global; class a end]]
+    assert_no_warn [[pluto_use global; local a; a = 1]]
+    assert_no_warn [[pluto_use global; local a; do a = 1 end]]
+
+    -- explicit globals
+    assert_no_warn [[pluto_use global; global a = 1]]
+    assert_no_warn [[pluto_use global; global function a() end]]
+    assert_no_warn [[pluto_use global; global class a end]]
+
+    -- predefine globals
+    assert_no_warn [[pluto_use global; global a; a = 1]]
+    assert_no_warn [[pluto_use global; global a, b; a = 1; b = 2]]
+end
+
+print "Testing chained comparisons."
+do
+    local function f(x)
+        return x
+    end
+
+    -- Normally, chaining the '<', '<=', '>' and '>=' operators is an error because they return a boolean (even with metatables) but error when a boolean is an operand.
+    -- Pluto generates code for it such that 'a < b < c' equals 'a < b and b < c'.
+    assert((0 < f(0) < 100) == false)
+    assert((0 < f(1) < 100) == true)
+    assert((0 < f(100) < 100) == false)
+    assert((100 > f(0) > 0) == false)
+    assert((100 > f(1) > 0) == true)
+    assert((100 > f(100) > 0) == false)
+
+    -- Any chain length is acceptable
+    assert(0 < 1 < 2 < 3)
+
+    -- '==' and '~=' are not changed
+    assert(1 ~= true)
+    assert(1 == 1 == true)
+    assert(1 == 1 ~= 1)
+end
+do
+    local { bigint } = require "*"
+
+    local a = new bigint("69")
+    local b = new bigint("420")
+    local c = new bigint("1337")
+
+    assert((a < b < c) == true)
+end
+
+print "Testing modified require semantics."
+do
+    local currentdir = io.absolute(io.currentdir())
+    if currentdir:endswith("pluto") then
+        io.currentdir("..")
+    else
+        io.contents("example_module.pluto", "")
+    end
+
+    package.preload["example_module"] = || -> "Test Value"
+    assert(select(2, require("example_module")):contains("example_module.pluto"))
+    assert(select(1, require("pluto:example_module")) == "Test Value")
+    package.preload["example_module"] = nil
+    assert(select(2, pcall(|| -> require("a"))):contains("module 'a' not found"))
+    assert(select(2, pcall(|| -> require("pluto:a"))):contains("is not a valid pluto library"))
+
+    io.currentdir(currentdir)
+    -- check cwd if this fails.
+end
+
+print "Testing cross-platform consistency."
+do
+    local currentdir = io.absolute(io.currentdir())
+    if currentdir:endswith("pluto") then
+        io.currentdir("..")
+    else
+        io.contents("example_module.pluto", "")
+    end
+
+    assert(io.contents("file_that_doesnt_exist") == nil)
+    assert(io.contents("example_module.pluto") == "")
+
+    io.currentdir(currentdir)
+    -- check cwd if this fails.
+end

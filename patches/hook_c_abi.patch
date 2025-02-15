@@ -1,0 +1,83 @@
+diff --git a/Pluto-0.10.4/src/lauxlib.cpp b/Pluto-0.10.4/src/lauxlib.cpp
+index 7941b9f..0ae6f23 100644
+--- a/Pluto-0.10.4/src/lauxlib.cpp
++++ b/Pluto-0.10.4/src/lauxlib.cpp
+@@ -840,7 +840,7 @@ static int skipcomment (FILE *f, int *cp) {
+ }
+ 
+ #ifdef PLUTO_LOADFILE_HOOK
+-extern bool PLUTO_LOADFILE_HOOK(lua_State* L, const char* filename);
++extern "C" bool PLUTO_LOADFILE_HOOK(lua_State* L, const char* filename);
+ #endif
+ 
+ LUALIB_API int luaL_loadfilex (lua_State *L, const char *filename,
+diff --git a/Pluto-0.10.4/src/lbaselib.cpp b/Pluto-0.10.4/src/lbaselib.cpp
+index f9c6da4..6d4e5b8 100644
+--- a/Pluto-0.10.4/src/lbaselib.cpp
++++ b/Pluto-0.10.4/src/lbaselib.cpp
+@@ -446,7 +446,7 @@ static const char *generic_reader (lua_State *L, void *ud, size_t *size) {
+ 
+ 
+ #ifdef PLUTO_LOAD_HOOK
+-extern bool PLUTO_LOAD_HOOK(lua_State* L, const char* filename);
++extern "C" bool PLUTO_LOAD_HOOK(lua_State* L, const char* filename);
+ #endif
+ 
+ static int luaB_load (lua_State *L) {
+diff --git a/Pluto-0.10.4/src/lffi.cpp b/Pluto-0.10.4/src/lffi.cpp
+index f959c52..3f00e06 100644
+--- a/Pluto-0.10.4/src/lffi.cpp
++++ b/Pluto-0.10.4/src/lffi.cpp
+@@ -212,7 +212,7 @@ struct FfiFuncWrapper {
+ }
+ 
+ #ifdef PLUTO_FFI_CALL_HOOK
+-extern bool PLUTO_FFI_CALL_HOOK (lua_State *L, void *addr);
++extern "C" bool PLUTO_FFI_CALL_HOOK (lua_State *L, void *addr);
+ #endif
+ 
+ static int ffi_funcwrapper_call (lua_State *L) {
+diff --git a/Pluto-0.10.4/src/lhttplib.cpp b/Pluto-0.10.4/src/lhttplib.cpp
+index 3f84208..7adf264 100644
+--- a/Pluto-0.10.4/src/lhttplib.cpp
++++ b/Pluto-0.10.4/src/lhttplib.cpp
+@@ -69,7 +69,7 @@ static int await_task (lua_State *L, soup::SharedPtr<Task>&& spTask) {
+ #endif
+ 
+ #ifdef PLUTO_HTTP_REQUEST_HOOK
+-extern bool PLUTO_HTTP_REQUEST_HOOK(lua_State* L, const char* url);
++extern "C" bool PLUTO_HTTP_REQUEST_HOOK(lua_State* L, const char* url);
+ #endif
+ 
+ static int http_request (lua_State *L) {
+diff --git a/Pluto-0.10.4/src/liolib.cpp b/Pluto-0.10.4/src/liolib.cpp
+index 92873d3..2c5c1e3 100644
+--- a/Pluto-0.10.4/src/liolib.cpp
++++ b/Pluto-0.10.4/src/liolib.cpp
+@@ -288,11 +288,11 @@ static LStream *newfile (lua_State *L) {
+ 
+ 
+ #ifdef PLUTO_READ_FILE_HOOK
+-extern bool PLUTO_READ_FILE_HOOK(lua_State* L, const char* path);
++extern "C" bool PLUTO_READ_FILE_HOOK(lua_State* L, const char* path);
+ #endif
+ 
+ #ifdef PLUTO_WRITE_FILE_HOOK
+-extern bool PLUTO_WRITE_FILE_HOOK(lua_State* L, const char* path);
++extern "C" bool PLUTO_WRITE_FILE_HOOK(lua_State* L, const char* path);
+ #endif
+ 
+ 
+diff --git a/Pluto-0.10.4/src/loadlib.cpp b/Pluto-0.10.4/src/loadlib.cpp
+index f618e87..c938eb9 100644
+--- a/Pluto-0.10.4/src/loadlib.cpp
++++ b/Pluto-0.10.4/src/loadlib.cpp
+@@ -372,7 +372,7 @@ static int gctm (lua_State *L) {
+ #define ERRFUNC		2
+ 
+ #ifdef PLUTO_LOADCLIB_HOOK
+-extern bool PLUTO_LOADCLIB_HOOK(lua_State* L, const char* path);
++extern "C" bool PLUTO_LOADCLIB_HOOK(lua_State* L, const char* path);
+ #endif
+ 
+ /*
