@@ -79,8 +79,8 @@ impl Build {
 
         // update the package version in Cargo.toml to match the Pluto version!
         let (_, version) = env!("CARGO_PKG_VERSION").split_once('-').unwrap();
-        let src_dir = std::path::PathBuf::from_str(env!("CARGO_MANIFEST_DIR")).unwrap();
-        let src_dir = src_dir.join(format!("Pluto-{version}/src"));
+        let root_dir = std::path::PathBuf::from_str(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let src_dir = root_dir.join(format!("Pluto-{version}/src"));
 
         build_soup_dependencies(&build, &src_dir);
 
@@ -115,14 +115,14 @@ impl Build {
             build.file(src_dir.join(file).with_extension("cpp"));
         }
 
+        let patches_dir = root_dir.join("patches");
+        build.add_files_by_ext(&patches_dir, "cpp");
+
         Self(build)
     }
 
     pub fn compile(&mut self) {
         self.0.compile("plutostatic");
-        let out_dir = std::env::var("OUT_DIR").unwrap();
-        println!("cargo:rustc-link-search=native={out_dir}");
-        println!("cargo:rustc-link-lib=static=plutostatic");
     }
 }
 

@@ -9,10 +9,14 @@ A Rust library for compiling and linking [Pluto](https://pluto-lang.org/) into y
 Add the following to your `Cargo.toml`:
 
 ```toml
+[dependencies]
+# Add the `pluto-ffi` crate to your project if you want to use any of Pluto's standard libraries.
+pluto-ffi = "0.1.0"
+
 [build-dependencies]
 # pluto-build's version is suffixed with the Pluto version it was built against.
 # It's recommended to pin this to the exact version of Pluto you want to use.
-pluto-build = "=0.1.0-0.10.4"
+pluto-build = "=0.2.0-0.10.4"
 ```
 
 Then, in your `build.rs` file, add the following:
@@ -38,9 +42,19 @@ This will compile Pluto and link it statically into your project. You can then u
 mlua = { version = "0.10", features = ["lua54", "external"] }
 ```
 
-## Known Issues
+To be able to use Pluto's standard libraries, you must add the following after you've created your `Lua` instance:
 
-- The `mlua` crate doesn't call `luaL_openlibs` at the moment, which means none of Pluto's standard libraries are available. I'm working on a fix for this issue.
+```rust
+let lua = mlua::Lua::new();
+pluto_ffi::load_libraries!(&lua)?;
+```
+
+Or, if you want to load only specific libraries:
+
+```rust
+let lua = mlua::Lua::new();
+pluto_ffi::load_libraries!(&lua, &[pluto_ffi::PlutoLibrary::Base64])?;
+```
 
 ## Updating Pluto
 

@@ -1,6 +1,6 @@
 [package]
 name = "pluto-build"
-version = "0.1.0-0.10.4"
+version = "0.2.0-0.10.4"
 edition = "2021"
 authors = ["Sculas <contact@sculas.xyz>"]
 repository = "https://github.com/Sculas/pluto-build-rs"
@@ -10,7 +10,7 @@ license = "MIT"
 description = "A Rust library for compiling and linking Pluto into your Rust project."
 
 [workspace]
-members = ["testcrate"]
+members = ["pluto-ffi", "testcrate"]
 
 [dependencies]
 cc = { version = "1.2", features = ["parallel"] }

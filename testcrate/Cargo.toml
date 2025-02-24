@@ -5,6 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
+pluto-ffi = { path = "../pluto-ffi" }
 mlua = { version = "0.10", features = [
     "lua54",
     "macros",
