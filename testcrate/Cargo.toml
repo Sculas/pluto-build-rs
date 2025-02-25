@@ -8,7 +8,6 @@ publish = false
 pluto-ffi = { path = "../pluto-ffi" }
 mlua = { version = "0.10", features = [
     "lua54",
-    "macros",
     "external",
 ], path = "../../mlua" }
 
